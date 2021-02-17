@@ -135,12 +135,13 @@ def loss_function(P, Q, metric='JSD', delta=1e-16):
         processes  = [mp.Process(target=target, args=(P, Q, idx, return_dict)) for idx in idx_tuples]
         for task in processes: task.start()
         for task in processes: task.join()
-        return np.concatenate([return_dict[idx] for idx in idx_tuples])
-    if metric == 'MSE'   : return np.mean(      (P - Q)**2, axis=1)
-    if metric == 'MAE'   : return np.mean(np.abs(P - Q)   , axis=1)
-    if metric == 'KLD'   : return np.mean(P*np.log(P/Q)   , axis=1)
-    if metric == 'X-S'   : return np.mean(Q*np.log(1/P)   , axis=1)
-    if metric == 'DeltaE': return jets_4v(P)['E'] - jets_4v(Q)['E']
+        loss = np.concatenate([return_dict[idx] for idx in idx_tuples])
+    if metric == 'MSE'   : loss = np.mean(      (P - Q)**2, axis=1)
+    if metric == 'MAE'   : loss = np.mean(np.abs(P - Q)   , axis=1)
+    if metric == 'KLD'   : loss = np.mean(P*np.log(P/Q)   , axis=1)
+    if metric == 'X-S'   : loss = np.mean(Q*np.log(1/P)   , axis=1)
+    if metric == 'DeltaE': loss = jets_4v(P)['E'] - jets_4v(Q)['E']
+    return loss
 
 
 def fit_scaler(sample, scaler_out, reshape=True):

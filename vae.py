@@ -55,6 +55,7 @@ if os.path.isfile(args.model_in):
 if os.path.isfile(args.scaler_in):
     print('Loading scaler              from', args.scaler_in)
     scaler = pickle.load(open(args.scaler_in, 'rb'))
+args.output_dir += '/'+'plots'
 
 
 # LOADING TRAINING DATA AND TRAINING LOOP
