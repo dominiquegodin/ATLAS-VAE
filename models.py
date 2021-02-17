@@ -4,6 +4,30 @@ from   tensorflow.keras.layers import Flatten, Dense, concatenate, Reshape, Drop
 from   tensorflow.keras        import Input, regularizers, models, callbacks, mixed_precision, losses, optimizers
 
 
+def create_model(input_dim, FCN_neurons, latent_dim, lr, beta):
+    #model = FCN_AE(input_dim, FCN_neurons, latent_dim)
+    model = FCN_VAE(input_dim, FCN_neurons, latent_dim, beta)
+    print('\nNEURAL NETWORK ARCHITECTURE'); model.summary(); print()
+    model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=False), loss='binary_crossentropy')
+    #model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=True), loss='mean_squared_error')
+    #model.compile(optimizer=optimizers.RMSprop(lr=lr), loss='binary_crossentropy')
+    return model
+
+
+class Sampling(Layer):
+    def call(self, inputs):
+        mean, log_var = inputs
+        return tf.keras.backend.random_normal(tf.shape(mean)) * tf.exp(log_var/2) + mean
+
+
+def callback(model_out, patience, metrics):
+    calls  = [callbacks.ModelCheckpoint(model_out, save_best_only=True, monitor=metrics, verbose=1)]
+    calls += [callbacks.ReduceLROnPlateau(patience=5, factor=0.5, min_delta=1e-5, monitor=metrics, verbose=1)]
+    calls += [callbacks.EarlyStopping(patience=patience, restore_best_weights=True,
+                                      min_delta=1e-5, monitor=metrics, verbose=1)]
+    return calls + [callbacks.TerminateOnNaN()]
+
+
 def FCN_AE(input_dim, FCN_neurons, latent_dim):
     encoder_inputs = Input(shape=(input_dim,)); z = encoder_inputs
     for n_neurons in FCN_neurons: z = Dense(n_neurons, activation='selu')(z)
@@ -38,30 +62,6 @@ def FCN_VAE(input_dim, FCN_neurons, latent_dim, beta):
                                                  - tf.square(coding_mean), axis=-1)
     vae.add_loss(beta * tf.keras.backend.mean(latent_loss)/input_dim)
     return vae
-
-
-class Sampling(Layer):
-    def call(self, inputs):
-        mean, log_var = inputs
-        return tf.keras.backend.random_normal(tf.shape(mean)) * tf.exp(log_var/2) + mean
-
-
-def create_model(input_dim, FCN_neurons, latent_dim, lr, beta):
-    #model = FCN_AE(input_dim, FCN_neurons, latent_dim)
-    model = FCN_VAE(input_dim, FCN_neurons, latent_dim, beta)
-    print('\nNEURAL NETWORK ARCHITECTURE'); model.summary(); print()
-    model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=False), loss='binary_crossentropy')
-    #model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=True), loss='mean_squared_error')
-    #model.compile(optimizer=optimizers.RMSprop(lr=lr), loss='binary_crossentropy')
-    return model
-
-
-def callback(model_out, patience, metrics):
-    calls  = [callbacks.ModelCheckpoint(model_out, save_best_only=True, monitor=metrics, verbose=1)]
-    calls += [callbacks.ReduceLROnPlateau(patience=5, factor=0.5, min_delta=1e-5, monitor=metrics, verbose=1)]
-    calls += [callbacks.EarlyStopping(patience=patience, restore_best_weights=True,
-                                      min_delta=1e-5, monitor=metrics, verbose=1)]
-    return calls + [callbacks.TerminateOnNaN()]
 
 
 '''

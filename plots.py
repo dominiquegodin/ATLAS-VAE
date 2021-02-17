@@ -174,5 +174,5 @@ def ROC_curves(X_true, y_true, X_pred, weights, output_dir, metrics_list, wps):
     plt.ylabel('$G_{S/B}=\epsilon_{\operatorname{sig}}/\epsilon_{\operatorname{bkg}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=12)
     plt.legend(loc='upper right', fontsize=16)
-    file_name = output_dir+'/'+'ROC.png'
+    file_name = output_dir+'/'+'ROC_plots.png'
     print('Saving ROC curves         to:', file_name); plt.savefig(file_name)

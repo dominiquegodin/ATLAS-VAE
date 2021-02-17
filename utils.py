@@ -126,7 +126,7 @@ def jets_3v(sample, idx=[0,None]):
     return np.concatenate([n[...,np.newaxis] for n in [pt, y, phi]], axis=2)
 
 
-def loss_function(P, Q, metric='JSD', delta=1e-16):
+def loss_function(P, Q, metric, delta=1e-16):
     P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
     if metric == 'JSD' or metric == 'EMD':
         idx_tuples = get_idx(len(P), n_sets=mp.cpu_count())

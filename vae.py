@@ -65,7 +65,7 @@ if args.n_epochs > 0:
         try: os.mkdir(path)
         except FileExistsError: pass
     sample = make_sample(args.n_train, args.n_W, bkg_cuts, sig_cuts, bkg='qcd', sig='W')
-    sample = reweight_sample(sample, sig_bins=50, bkg_bins=100, weights='flat_pt')
+    sample = reweight_sample(sample, sig_bins=50, bkg_bins=100, weights=None)
     #var_distributions(sample, args.output_dir, var='pt', sig_bins=50, bkg_bins=100); sys.exit()
     sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
     train_X, valid_X  = model_selection.train_test_split(np.float32(sample['jets']), test_size=0.2, random_state=0)
