@@ -4,13 +4,15 @@ from   tensorflow.keras.layers import Flatten, Dense, concatenate, Reshape, Drop
 from   tensorflow.keras        import Input, regularizers, models, callbacks, mixed_precision, losses, optimizers
 
 
-def create_model(input_dim, FCN_neurons, latent_dim, lr, beta):
-    #model = FCN_AE(input_dim, FCN_neurons, latent_dim)
-    model = FCN_VAE(input_dim, FCN_neurons, latent_dim, beta)
-    print('\nNEURAL NETWORK ARCHITECTURE'); model.summary(); print()
-    model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=False), loss='binary_crossentropy')
-    #model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=True), loss='mean_squared_error')
-    #model.compile(optimizer=optimizers.RMSprop(lr=lr), loss='binary_crossentropy')
+def create_model(input_dim, FCN_neurons, latent_dim, lr, beta, n_gpus):
+    tf.debugging.set_log_device_placement(False)
+    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:'+str(n) for n in np.arange(n_gpus)])
+    with strategy.scope():
+        model = FCN_VAE(input_dim, FCN_neurons, latent_dim, beta)
+        print('\nNEURAL NETWORK ARCHITECTURE'); model.summary(); print()
+        model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=False), loss='binary_crossentropy')
+        #model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=True), loss='mean_squared_error')
+        #model.compile(optimizer=optimizers.RMSprop(lr=lr), loss='binary_crossentropy')
     return model
 
 
@@ -55,12 +57,12 @@ def FCN_VAE(input_dim, FCN_neurons, latent_dim, beta):
     for n_neurons in FCN_neurons[::-1]: z = Dense(n_neurons, activation='selu')(z)
     z = Dense(input_dim, activation='sigmoid')(z)
     decoder        = models.Model(inputs=decoder_inputs, outputs=z)
-    coding         = encoder(inputs=encoder_inputs)
+    coding         = encoder(encoder_inputs)
     reconstruction = decoder(coding)
     vae            = models.Model(inputs=encoder_inputs, outputs=reconstruction)
     latent_loss    = -0.5 * tf.keras.backend.sum(1 + coding_log_var - tf.exp(coding_log_var)
                                                  - tf.square(coding_mean), axis=-1)
-    vae.add_loss(beta * tf.keras.backend.mean(latent_loss)/input_dim)
+    vae.add_loss(beta*tf.keras.backend.mean(latent_loss)/input_dim)
     return vae
 
 

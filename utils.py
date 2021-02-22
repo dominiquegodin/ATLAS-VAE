@@ -1,12 +1,12 @@
 import numpy           as np
 import multiprocessing as mp
 import sys, h5py, time, pickle, warnings
-from   sklearn         import preprocessing, metrics
-from   scipy.spatial   import distance
-from   energyflow      import emd
+from   sklearn       import preprocessing, metrics
+from   scipy.spatial import distance
+from   energyflow    import emd
 
 
-def make_sample(bkg_idx, sig_idx, bkg_cuts, sig_cuts, bkg, sig, normalization=True):
+def make_sample(bkg_idx, sig_idx, bkg_cuts, sig_cuts, bkg, sig, normalization=True, upsample=False):
     data_path  = '/opt/tmp/godin/AD_data'
     data_files = {'qcd':'AtlasMCdijet36.h5', 'W':'resamples_oe_w.h5', 'top':'AtlasMCttbar.h5'}
     bkg_file   = data_path + '/' + data_files[bkg]
@@ -15,12 +15,22 @@ def make_sample(bkg_idx, sig_idx, bkg_cuts, sig_cuts, bkg, sig, normalization=Tr
     if np.isscalar(sig_idx): sig_idx = (0, sig_idx)
     if sig_idx[0] != sig_idx[1]: sig_sample = load_data(sig_file, 'constituents', sig_idx, cuts=sig_cuts)
     if bkg_idx[0] != bkg_idx[1]: bkg_sample = load_data(bkg_file, 'constituents', bkg_idx, cuts=bkg_cuts)
-    if   'sig_sample' not in locals(): sample = bkg_sample
-    elif 'bkg_sample' not in locals(): sample = sig_sample
-    else: sample = {key:np.concatenate([sig_sample[key], bkg_sample[key]]) for key in bkg_sample}
+    if   'sig_sample' not in locals():
+        sample = bkg_sample
+    elif 'bkg_sample' not in locals():
+        sample = sig_sample
+    else:
+        if sig=='W' and upsample: sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
+        sample = {key:np.concatenate([sig_sample[key], bkg_sample[key]]) for key in bkg_sample}
     if normalization: sample['jets'] /= sample['pt'][:,np.newaxis]
     #for key in sample: print(key, sample[key].shape, sample[key].dtype)
     return sample
+
+
+def upsampling(sample, target_size):
+    sample_size = len(list(sample.values())[0])
+    indices = np.random.choice(np.arange(sample_size), target_size, replace=sample_size<target_size)
+    return {key: np.take(sample[key], indices, axis=0) for key in sample}
 
 
 def load_data(data_file, data_key, idx, n_constituents=20, cuts='', multiprocess=True):
@@ -113,7 +123,7 @@ def JSD(P, Q, idx, return_dict, reshape=False):
     else: return_dict[idx] = [distance.jensenshannon(P[n,:], Q[n,:]) for n in np.arange(idx[0],idx[1])]
 def EMD(P, Q, idx, return_dict, n_iter=int(1e7)):
     jets_3v_pairs    = zip(jets_3v(P[idx[0]:idx[1]]), jets_3v(Q[idx[0]:idx[1]]))
-    return_dict[idx] = [emd.emd(P, Q, return_flow=False, n_iter_max=n_iter) for P, Q in jets_3v_pairs]
+    return_dict[idx] = [emd.emd_pot(P, Q, return_flow=False, n_iter_max=n_iter) for P, Q in jets_3v_pairs]
 def jets_3v(sample, idx=[0,None]):
     sample = np.float32(sample[idx[0]:idx[1]])
     sample = np.reshape(sample, (-1,int(sample.shape[1]/4),4))
@@ -127,7 +137,6 @@ def jets_3v(sample, idx=[0,None]):
 
 
 def loss_function(P, Q, metric, delta=1e-16):
-    P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
     if metric == 'JSD' or metric == 'EMD':
         idx_tuples = get_idx(len(P), n_sets=mp.cpu_count())
         target     = JSD if metric == 'JSD' else EMD
@@ -135,17 +144,17 @@ def loss_function(P, Q, metric, delta=1e-16):
         processes  = [mp.Process(target=target, args=(P, Q, idx, return_dict)) for idx in idx_tuples]
         for task in processes: task.start()
         for task in processes: task.join()
-        loss = np.concatenate([return_dict[idx] for idx in idx_tuples])
-    if metric == 'MSE'   : loss = np.mean(      (P - Q)**2, axis=1)
-    if metric == 'MAE'   : loss = np.mean(np.abs(P - Q)   , axis=1)
-    if metric == 'KLD'   : loss = np.mean(P*np.log(P/Q)   , axis=1)
-    if metric == 'X-S'   : loss = np.mean(Q*np.log(1/P)   , axis=1)
-    if metric == 'DeltaE': loss = jets_4v(P)['E'] - jets_4v(Q)['E']
-    return loss
+        return np.concatenate([return_dict[idx] for idx in idx_tuples])
+    if metric == 'MSE'   : return np.mean(      (P - Q)**2, axis=1)
+    if metric == 'MAE'   : return np.mean(np.abs(P - Q)   , axis=1)
+    if metric == 'DeltaE': return jets_4v(P)['E'] - jets_4v(Q)['E']
+    P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
+    if metric == 'KLD'   : return np.mean(P*np.log(P/Q)   , axis=1)
+    if metric == 'X-S'   : return np.mean(Q*np.log(1/P)   , axis=1)
 
 
 def fit_scaler(sample, scaler_out, reshape=True):
-    print('Fitting quantile transform', end=' --> ', flush=True); start_time = time.time()
+    print('Fitting quantile transform', end='  --> ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,4))
     scaler = preprocessing.QuantileTransformer(n_quantiles=10000).fit(sample)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')

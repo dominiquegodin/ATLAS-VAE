@@ -1,9 +1,9 @@
 import numpy             as np
 import multiprocessing   as mp
 import matplotlib.pyplot as plt
-from matplotlib          import pylab, ticker
-from sklearn             import metrics
-from utils               import loss_function, get_4v
+from matplotlib import pylab, ticker
+from sklearn    import metrics
+from utils      import loss_function, get_4v
 
 
 def var_distributions(sample, output_dir, var, sig_bins, bkg_bins, density=True, log=True):
@@ -16,9 +16,8 @@ def var_distributions(sample, output_dir, var, sig_bins, bkg_bins, density=True,
         condition = sample['JZW']==-1 if n==0 else sample['JZW']>= 0 if n==1 else sample['JZW']>=-2
         if not np.any(condition): continue
         variable  = sample[var][condition]; weights = sample['weights'][condition]
-        min_val   = np.min(variable)
-        bin_width = (np.max(variable) - min_val) / n_bins[n]
-        bins      = list(np.arange(min_val, np.max(variable), bin_width)) + [np.max(variable)+1e-3]
+        bin_width = (np.max(variable) - np.min(variable)) / n_bins[n]
+        bins      = list(np.arange(np.min(variable), np.max(variable), bin_width)) + [np.max(variable)+1e-3]
         weights  *= 100/(np.sum(sample['weights'])) #weights *= 100/(np.sum(weights))
         if density:
             indices  = np.searchsorted(bins, variable, side='right')
@@ -69,21 +68,20 @@ def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir):
 
 
 def loss_distributions(y_true, X_loss, metric, weights, output_dir, n_bins=100):
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
-    bin_width = np.max(X_loss)/n_bins; bins = np.arange(0, np.max(X_loss)+bin_width, bin_width)
-    if metric == 'EMD': bin_width = 30/n_bins; bins = np.arange(0, 30+bin_width, bin_width)
-    if metric == 'KLD': bin_width = 0.3/n_bins; bins = np.arange(0, 30+bin_width, bin_width)
-    labels = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
+    max_loss  = {'JSD':0.3, 'MSE':0.15, 'EMD':25, 'KLD':0.3}
+    max_loss  = min(max_loss[metric], np.max(X_loss))
+    bin_width = max_loss/n_bins
+    bins      = list(np.arange(0, max_loss, bin_width)) + [max_loss]
+    labels    = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
     if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
+    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
     for n in set(y_true):
         hist_weights  = weights[y_true==n]
         hist_weights *= 100/np.sum(hist_weights)/bin_width
         pylab.hist(X_loss[y_true==n], bins, histtype='step', weights=hist_weights,
                    log=False, label=labels[n], color=colors[n], lw=2)
-    if metric == 'JSD': pylab.xlim(0, 0.3)
-    if metric == 'MSE': pylab.xlim(0, 0.15); pylab.xticks(np.arange(0,0.16,0.05))
-    if metric == 'EMD': pylab.xlim(0, 25)
-    if metric == 'KLD': pylab.xlim(0, 0.3)
+    pylab.xlim(0, max_loss)
+    #pylab.xticks(np.arange(0,0.16,0.05))
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.tick_params(axis='both', which='major', labelsize=14)
     plt.xlabel(metric+' reconstruction loss', fontsize=24)
@@ -98,16 +96,13 @@ def mass_correlation(y_true, X_loss, metric, X_mass, output_dir, n_bins=100):
     for n in set(y_true):
         n_loss   = X_loss[y_true==n]
         n_mass   = X_mass[y_true==n]
-        loss_min = np.min(n_loss); loss_max = np.max(n_loss); loss_step = (loss_max-loss_min)/n_bins
-        if metric == 'EMD': loss_min = np.min(n_loss); loss_max = 30; loss_step = (loss_max-loss_min)/n_bins
-        if metric == 'KLD': loss_min = np.min(n_loss); loss_max = 0.3; loss_step = (loss_max-loss_min)/n_bins
-        losses  += [np.arange(loss_min, loss_max, loss_step)[:-2]]
+        max_loss  = {'JSD':0.3, 'MSE':0.15, 'EMD':25, 'KLD':0.3}
+        max_loss  = min(max_loss[metric], np.max(n_loss))
+        bin_width = max_loss/n_bins
+        losses  += [np.arange(0, max_loss, bin_width)[:-2]]
         masses  += [[np.mean(n_mass[n_loss>loss]) for loss in losses[n]]]
     plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
-    if metric == 'JSD': pylab.xlim(0, 0.3)
-    if metric == 'MSE': pylab.xlim(0, 0.15)
-    if metric == 'EMD': pylab.xlim(0, 25)
-    if metric == 'KLD': pylab.xlim(0, 0.3)
+    pylab.xlim(0, max_loss)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.tick_params(axis='both', which='major', labelsize=14)
     plt.xlabel('Cut on '+metric+' reconstruction loss', fontsize=24)
@@ -174,5 +169,5 @@ def ROC_curves(X_true, y_true, X_pred, weights, output_dir, metrics_list, wps):
     plt.ylabel('$G_{S/B}=\epsilon_{\operatorname{sig}}/\epsilon_{\operatorname{bkg}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=12)
     plt.legend(loc='upper right', fontsize=16)
-    file_name = output_dir+'/'+'ROC_plots.png'
+    file_name = output_dir+'/'+'ROC_curves.png'
     print('Saving ROC curves         to:', file_name); plt.savefig(file_name)
