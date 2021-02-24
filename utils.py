@@ -34,7 +34,7 @@ def upsampling(sample, target_size):
 
 
 def load_data(data_file, data_key, idx, n_constituents=20, cuts='', multiprocess=True):
-    idx = (int(idx[0]),int(idx[1]))
+    #idx = (int(idx[0]),int(idx[1]))
     if multiprocess:
         def get_data(data_file, data_key, idx, n_constituents, return_dict):
             return_dict[idx] = h5py.File(data_file,"r")[data_key][idx[0]:idx[1],:4*n_constituents]
@@ -137,6 +137,7 @@ def jets_3v(sample, idx=[0,None]):
 
 
 def loss_function(P, Q, metric, delta=1e-16):
+    P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
     if metric == 'JSD' or metric == 'EMD':
         idx_tuples = get_idx(len(P), n_sets=mp.cpu_count())
         target     = JSD if metric == 'JSD' else EMD
@@ -148,7 +149,7 @@ def loss_function(P, Q, metric, delta=1e-16):
     if metric == 'MSE'   : return np.mean(      (P - Q)**2, axis=1)
     if metric == 'MAE'   : return np.mean(np.abs(P - Q)   , axis=1)
     if metric == 'DeltaE': return jets_4v(P)['E'] - jets_4v(Q)['E']
-    P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
+    #P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
     if metric == 'KLD'   : return np.mean(P*np.log(P/Q)   , axis=1)
     if metric == 'X-S'   : return np.mean(Q*np.log(1/P)   , axis=1)
 
@@ -158,7 +159,7 @@ def fit_scaler(sample, scaler_out, reshape=True):
     if reshape: sample = np.reshape(sample, (-1,4))
     scaler = preprocessing.QuantileTransformer(n_quantiles=10000).fit(sample)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    print('Saving scaler file in', scaler_out)
+    print('Saving quantile transform to', scaler_out)
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
 def apply_scaler(sample, scaler, reshape=True):
@@ -180,7 +181,7 @@ def inverse_scaler(sample, scaler, reshape=True):
 
 
 def best_cut(y_true, X_loss, X_mass, weights, cuts=''):
-    cuts = '(X_mass >= 140) & (X_mass <= 200)'
+    #cuts = '(X_mass >= 140) & (X_mass <= 200)'
     if cuts != '':
         y_true  = y_true [eval(cuts)]
         X_loss  = X_loss [eval(cuts)]
@@ -188,8 +189,9 @@ def best_cut(y_true, X_loss, X_mass, weights, cuts=''):
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
     len_0      = np.sum(fpr==0)
     thresholds = thresholds[len_0:]       [tpr[len_0:]>0.01]
-    #ratios     = (tpr[len_0:]/fpr[len_0:])[tpr[len_0:]>0.01]
-    ratios     = (tpr[len_0:]/np.sqrt(fpr[len_0:]))[tpr[len_0:]>0.01]
+    ratios     = (tpr[len_0:]/fpr[len_0:])[tpr[len_0:]>0.01]
+    #print('Best wp:', format(thresholds[np.argmax(ratios)],'.3f'))
+    #print('Best gain:', format(np.max(ratios),'.2f'))
     return thresholds[np.argmax(ratios)]
 
 

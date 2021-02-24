@@ -157,12 +157,15 @@ def ROC_curves(X_true, y_true, X_pred, weights, output_dir, metrics_list, wps):
     plt.legend(loc='upper right', fontsize=16)
     plt.legend(loc='upper right', fontsize=16)
     plt.subplot(2, 1, 2); pylab.grid(True); axes = plt.gca()
+    max_gain = 0
     for metric in metrics_list:
         fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
-        len_0 = np.sum(fpr==0)
-        plt.plot(100*tpr[len_0:], tpr[len_0:]/fpr[len_0:], label=metric, lw=2, color=colors_dict[metric])
+        len_0    = np.sum(fpr==0)
+        gain     = tpr[len_0:]/fpr[len_0:]
+        max_gain = max(max_gain, np.max(gain[100*tpr[len_0:]>=1]))
+        plt.plot(100*tpr[len_0:], gain, label=metric, lw=2, color=colors_dict[metric])
     pylab.xlim(1,100)
-    pylab.ylim(1,5)
+    pylab.ylim(1,np.ceil(max_gain))
     plt.xscale('log')
     plt.xticks([1,10,100], ['1','10', '100'])
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)

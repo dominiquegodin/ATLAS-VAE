@@ -10,7 +10,7 @@ def create_model(input_dim, FCN_neurons, latent_dim, lr, beta, n_gpus):
     with strategy.scope():
         model = FCN_VAE(input_dim, FCN_neurons, latent_dim, beta)
         print('\nNEURAL NETWORK ARCHITECTURE'); model.summary(); print()
-        model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=False), loss='binary_crossentropy')
+        model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=True), loss='binary_crossentropy')
         #model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=True), loss='mean_squared_error')
         #model.compile(optimizer=optimizers.RMSprop(lr=lr), loss='binary_crossentropy')
     return model
@@ -63,6 +63,7 @@ def FCN_VAE(input_dim, FCN_neurons, latent_dim, beta):
     latent_loss    = -0.5 * tf.keras.backend.sum(1 + coding_log_var - tf.exp(coding_log_var)
                                                  - tf.square(coding_mean), axis=-1)
     vae.add_loss(beta*tf.keras.backend.mean(latent_loss)/input_dim)
+    #vae.add_loss(beta*tf.keras.backend.mean(latent_loss))
     return vae
 
 

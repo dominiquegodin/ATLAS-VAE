@@ -5,7 +5,7 @@ Variational autoencoder for anomaly detection at the Large Hadron Collider
 # Training at LPS (atlas15 or atlas16)
 1) Clone framework from GitHub
    ```
-   git clone git@github.com:dominiquegodin/ATLAS-VAE.git
+   git clone https://github.com/dominiquegodin/ATLAS-VAE.git
    ```
 2) Move to framework directory
    ```
@@ -19,7 +19,7 @@ Variational autoencoder for anomaly detection at the Large Hadron Collider
    ```
    sbatch -w atlas15 sbatch.sh
    ```
-5) Send array jobs to Slurm manager (e.g. id 1 to 10)
+5) Send array jobs to Slurm manager (e.g. for id 1 to 10)
    ```
    sbatch -w atlas15 sbatch.sh
    ```
@@ -41,13 +41,17 @@ Variational autoencoder for anomaly detection at the Large Hadron Collider
    salloc -w atlas15 --time=00:30:00
    . sbatch.sh
    ```
+10) Monitor training in real time
+   ```
+   tail -f -n 1000 $log_file_name
+   ```
 
 
-# Using vae.py arguments
+# Arguments for vae.py
 * n_train: number of training QCD jets
-* n_W    : number of training W jets
 * n_valid: number of validation QCD jets
-* n_top  : number of validation top jets
+* n_test: number of test QCD jets
+* n_W    : number of training W jets
 * n_top  : number of validation top jets
 * n_constituents: number of constituents
 * batch_size: size of training batches
@@ -60,3 +64,4 @@ Variational autoencoder for anomaly detection at the Large Hadron Collider
 * n_iter: number of iterations for validation
 * n_gpus: number of GPUs for distributed training
 * apply_cut: apply best cut to mass histograms
+* plotting: enable plotting performance results
