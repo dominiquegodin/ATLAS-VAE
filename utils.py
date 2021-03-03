@@ -23,7 +23,7 @@ def make_sample(bkg_idx, sig_idx, bkg_cuts, sig_cuts, bkg, sig, normalization=Tr
         if sig=='W' and upsample: sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
         sample = {key:np.concatenate([sig_sample[key], bkg_sample[key]]) for key in bkg_sample}
     if normalization: sample['jets'] /= sample['pt'][:,np.newaxis]
-    #for key in sample: print(key, sample[key].shape, sample[key].dtype)
+    #for key in sample: print(key, sample[key].shape)
     return sample
 
 
@@ -34,7 +34,6 @@ def upsampling(sample, target_size):
 
 
 def load_data(data_file, data_key, idx, n_constituents=20, cuts='', multiprocess=True):
-    #idx = (int(idx[0]),int(idx[1]))
     if multiprocess:
         def get_data(data_file, data_key, idx, n_constituents, return_dict):
             return_dict[idx] = h5py.File(data_file,"r")[data_key][idx[0]:idx[1],:4*n_constituents]
@@ -59,26 +58,27 @@ def load_data(data_file, data_key, idx, n_constituents=20, cuts='', multiprocess
     return sample
 
 
-def reweight_sample(sample, sig_bins, bkg_bins, weights='X-section', sig_frac=0.1, density=True):
+def reweight_sample(sample, sig_bins, bkg_bins, weight_type='weights', sig_frac=0.1, density=True):
     sig, bkg = sample['JZW']==-1, sample['JZW']>=0
-    if weights == None:
+    if weight_type == None:
         sample['weights'] = np.ones(len(sample['weights']))
-    if weights == 'flat_pt' and np.any(sig):
-        sample['weights'][sig]  = pt_weighting(sample['pt'][sample['JZW']==-1], sig_bins, density=density)
-    if weights == 'flat_pt' and np.any(bkg):
-        sample['weights'][bkg]  = pt_weighting(sample['pt'][sample['JZW']>= 0], bkg_bins, density=density)
+    if weight_type == 'flat_pt' and np.any(sig):
+        sample['weights'][sig] = pt_weighting(sample['pt'][sample['JZW']==-1], sig_bins, density=density)
+    if weight_type == 'flat_pt' and np.any(bkg):
+        sample['weights'][bkg] = pt_weighting(sample['pt'][sample['JZW']>= 0], bkg_bins, density=density)
     if np.any(sig) and np.any(bkg):
         sample['weights'][sig] *= np.sum(sample['weights'][bkg])/np.sum(sample['weights'][sig])
         sample['weights'][sig] *= sig_frac/(1-sig_frac)
     #print( np.sum(np.isfinite(sample['weights'])==False), np.sum(sample['weights']<=0) )
-    #print( np.min(sample['weights']), np.max(sample['weights']) )
     return sample
 
 
 def pt_weighting(pt, n_bins, density=True):
+    pt        = np.float32(pt)
     bin_width = (np.max(pt) - np.min(pt)) / n_bins
-    pt_bins   = list(np.arange(np.min(pt), np.max(pt), bin_width)) + [np.max(pt)+1e-3]
-    pt_idx    = np.digitize (pt, pt_bins, right=False) -1
+    pt_bins   = [np.min(pt) + k*bin_width for k in np.arange(n_bins+1)]
+    #pt_bins   = list(np.arange(np.min(pt), np.max(pt), bin_width)) + [np.max(pt)+1e-3]
+    pt_idx    = np.minimum(np.digitize(pt, pt_bins, right=False), len(pt_bins)-1) -1
     hist_pt   = np.histogram(pt, pt_bins, density=density)[0]
     weights   = 1/hist_pt[pt_idx]
     return weights*len(weights)/np.sum(weights)
@@ -94,7 +94,7 @@ def weights_factors(JZW, data_file, lum=36):
         n_JZW = [  35596, 13406964, 15909276, 17831457, 15981239,
                 15997303, 13913843, 13983297, 15946135, 15993849]
         factors = np.ones(len(JZW))
-        for n in np.arange(len(n_JZW)): factors = np.where(JZW==n, lum*n_JZW[n]/np.sum(JZW==n), factors)
+        for n in np.arange(len(n_JZW)): factors[JZW==n] = lum*n_JZW[n]/np.sum(JZW==n)
     return factors
 
 
@@ -137,7 +137,7 @@ def jets_3v(sample, idx=[0,None]):
 
 
 def loss_function(P, Q, metric, delta=1e-16):
-    P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
+    if metric == 'B-1' or metric == 'B-2': return np.mean(P, axis=1)
     if metric == 'JSD' or metric == 'EMD':
         idx_tuples = get_idx(len(P), n_sets=mp.cpu_count())
         target     = JSD if metric == 'JSD' else EMD
@@ -148,16 +148,16 @@ def loss_function(P, Q, metric, delta=1e-16):
         return np.concatenate([return_dict[idx] for idx in idx_tuples])
     if metric == 'MSE'   : return np.mean(      (P - Q)**2, axis=1)
     if metric == 'MAE'   : return np.mean(np.abs(P - Q)   , axis=1)
-    if metric == 'DeltaE': return jets_4v(P)['E'] - jets_4v(Q)['E']
-    #P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
+    P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
     if metric == 'KLD'   : return np.mean(P*np.log(P/Q)   , axis=1)
-    if metric == 'X-S'   : return np.mean(Q*np.log(1/P)   , axis=1)
+    if metric == 'X-S'   : return np.mean(P*np.log(1/Q)   , axis=1)
+    if metric == 'DeltaE': return jets_4v(P)['E'] - jets_4v(Q)['E']
 
 
 def fit_scaler(sample, scaler_out, reshape=True):
     print('Fitting quantile transform', end='  --> ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,4))
-    scaler = preprocessing.QuantileTransformer(n_quantiles=10000).fit(sample)
+    scaler = preprocessing.QuantileTransformer(n_quantiles=10000, random_state=0).fit(sample)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     print('Saving quantile transform to', scaler_out)
     pickle.dump(scaler, open(scaler_out, 'wb'))
@@ -196,12 +196,12 @@ def best_cut(y_true, X_loss, X_mass, weights, cuts=''):
 
 
 def apply_cut(y_true, X_true, X_pred, sample, metric):
-    X_loss   = loss_function(X_true, X_pred, metric=metric)
-    loss_cut = best_cut(y_true, X_loss, sample['M'], sample['weights'])
-    print('Best', metric, 'cut:', metric, '>=', format(loss_cut, '.3f'))
-    sample = {key:sample[key][X_loss > loss_cut] for key in sample}
-    y_true = y_true[X_loss > loss_cut]
-    return sample, y_true
+    X_loss    = loss_function(X_true, X_pred, metric=metric)
+    loss_cuts = best_cut(y_true, X_loss, sample['M'], sample['weights'])
+    print('Best', metric, 'cut:', metric, '>=', format(loss_cuts, '.3f'))
+    sample = {key:sample[key][X_loss > loss_cuts] for key in sample}
+    y_true = y_true[X_loss > loss_cuts]
+    return sample
 
 
 def get_idx(size, start_val=0, n_sets=8):

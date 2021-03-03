@@ -21,7 +21,7 @@ Variational autoencoder for anomaly detection at the Large Hadron Collider
    ```
 5) Send array jobs to Slurm manager (e.g. for id 1 to 10)
    ```
-   sbatch -w atlas15 sbatch.sh
+   sbatch -w atlas15 --array=1-10 sbatch.sh
    ```
 6) Report job status
    ```
@@ -43,7 +43,7 @@ Variational autoencoder for anomaly detection at the Large Hadron Collider
    ```
 10) Monitor training in real time
    ```
-   tail -f -n 1000 $log_file_name
+   tail -f -n 1000 $log_file
    ```
 
 

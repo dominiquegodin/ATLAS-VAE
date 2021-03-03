@@ -10,16 +10,16 @@ def create_model(input_dim, FCN_neurons, latent_dim, lr, beta, n_gpus):
     with strategy.scope():
         model = FCN_VAE(input_dim, FCN_neurons, latent_dim, beta)
         print('\nNEURAL NETWORK ARCHITECTURE'); model.summary(); print()
-        model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=True), loss='binary_crossentropy')
+        model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=False), loss='binary_crossentropy')
         #model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=True), loss='mean_squared_error')
         #model.compile(optimizer=optimizers.RMSprop(lr=lr), loss='binary_crossentropy')
     return model
 
 
 class Sampling(Layer):
-    def call(self, inputs):
+    def call(self, inputs, seed=None):
         mean, log_var = inputs
-        return tf.keras.backend.random_normal(tf.shape(mean)) * tf.exp(log_var/2) + mean
+        return tf.random.normal(tf.shape(mean), seed=seed) * tf.exp(log_var/2) + mean
 
 
 def callback(model_out, patience, metrics):
@@ -48,22 +48,21 @@ def FCN_AE(input_dim, FCN_neurons, latent_dim):
 
 def FCN_VAE(input_dim, FCN_neurons, latent_dim, beta):
     encoder_inputs = Input(shape=(input_dim,)); z = encoder_inputs
-    for n_neurons in FCN_neurons: z = Dense(n_neurons, activation='selu')(z)
+    for n_neurons in FCN_neurons: z = Dense(n_neurons, activation='relu')(z)
     coding_mean    = Dense(latent_dim)(z)
     coding_log_var = Dense(latent_dim)(z)
     coding         = Sampling()([coding_mean, coding_log_var])
     encoder        = models.Model(inputs=encoder_inputs, outputs=coding)
     decoder_inputs = Input(shape=latent_dim); z = decoder_inputs
-    for n_neurons in FCN_neurons[::-1]: z = Dense(n_neurons, activation='selu')(z)
+    for n_neurons in FCN_neurons[::-1]: z = Dense(n_neurons, activation='relu')(z)
     z = Dense(input_dim, activation='sigmoid')(z)
     decoder        = models.Model(inputs=decoder_inputs, outputs=z)
     coding         = encoder(encoder_inputs)
     reconstruction = decoder(coding)
     vae            = models.Model(inputs=encoder_inputs, outputs=reconstruction)
-    latent_loss    = -0.5 * tf.keras.backend.sum(1 + coding_log_var - tf.exp(coding_log_var)
-                                                 - tf.square(coding_mean), axis=-1)
-    vae.add_loss(beta*tf.keras.backend.mean(latent_loss)/input_dim)
-    #vae.add_loss(beta*tf.keras.backend.mean(latent_loss))
+    kl_loss        = -0.5 * tf.reduce_sum(1 + coding_log_var - tf.exp(coding_log_var)
+                                          - tf.square(coding_mean), axis=-1)
+    vae.add_loss(beta*tf.reduce_mean(kl_loss)/input_dim)
     return vae
 
 
