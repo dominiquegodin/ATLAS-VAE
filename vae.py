@@ -1,15 +1,14 @@
 # IMPORT PACKAGES AND FUNCTIONS
 import numpy           as np
 import tensorflow      as tf
-import multiprocessing as mp
 import os, sys, pickle
 from   argparse  import ArgumentParser
 from   itertools import accumulate
 from   tabulate  import tabulate
 from   sklearn   import model_selection, utils
-from   utils     import make_sample, fit_scaler, apply_scaler, reweight_sample, loss_function, apply_cut
 from   models    import create_model, callback
-from   plots     import var_distributions, pt_reconstruction, loss_distributions, mass_correlation, ROC_curves
+from   utils     import make_sample, fit_scaler, apply_scaling, reweight_sample, apply_best_cut
+from   plots     import var_distributions, plot_results
 
 
 # PROGRAM ARGUMENTS
@@ -76,15 +75,17 @@ if args.n_epochs > 0:
         try: os.mkdir(path)
         except FileExistsError: pass
     sig_bins, bkg_bins = 50, 100; log = args.weight_type!='flat_pt'
+    print('TRAINING SAMPLE:')
     train_sample = make_sample(args.n_train, args.n_W, bkg_cuts, sig_cuts, bkg='qcd', sig='W')
     train_sample = {key:utils.shuffle(train_sample[key], random_state=0) for key in train_sample}
+    print('VALIDATION SAMPLE:')
     valid_sample = make_sample(args.n_valid, args.n_W, bkg_cuts, sig_cuts, bkg='qcd', sig='W')
     train_sample = reweight_sample(train_sample, sig_bins, bkg_bins, args.weight_type)
     var_distributions(train_sample, args.output_dir, sig_bins, bkg_bins, var='pt', log=log)
     train_X, valid_X = train_sample['jets'], valid_sample['jets']
     if args.scaling == 'ON':
         if not os.path.isfile(args.scaler_in): scaler = fit_scaler(train_X, args.scaler_out)
-        train_X, valid_X = apply_scaler(train_X, scaler), apply_scaler(valid_X, scaler); print()
+        train_X, valid_X = apply_scaling(train_X, scaler), apply_scaling(valid_X, scaler); print()
     print('Train sample:'   , format(len(train_X), '8.0f')  , 'jets'    )
     print('Valid sample:'   , format(len(valid_X), '8.0f')  , 'jets\n'  )
     print('Using TensorFlow', tf.__version__, 'with', n_gpus, 'GPU(s)\n')
@@ -96,11 +97,11 @@ if args.n_epochs > 0:
 
 
 # MODEL PREDICTIONS ON VALIDATION DATA
+print('\n+'+30*'-'+'+\n+--- TEST SAMPLE EVALUATION ---+\n+'+30*'-'+'+')
 sample = make_sample(args.n_test, args.n_top, bkg_cuts, sig_cuts, bkg='qcd', sig='top')
 y_true = np.int_(np.concatenate([np.zeros(np.sum(sample['JZW']==-1)), np.ones(np.sum(sample['JZW']>=0))]))
 #var_distributions(sample, args.output_dir, sig_bins=200, bkg_bins=600, var='pt'); sys.exit()
-print('\n+'+30*'-'+'+\n+--- TEST SAMPLE EVALUATION ---+\n+'+30*'-'+'+\n')
-if args.scaling == 'ON': X_true = apply_scaler(sample['jets'], scaler); print()
+if args.scaling == 'ON': X_true = apply_scaling(sample['jets'], scaler); print()
 else                   : X_true =              sample['jets']
 if args.n_iter > 1: print('Evaluating with', args.n_iter, 'iterations:')
 X_pred = np.empty(X_true.shape+(args.n_iter,), dtype=np.float32)
@@ -111,33 +112,13 @@ X_pred = np.mean(X_pred, axis=2); print()
 
 # CUT ON RECONSTRUCTION LOSS
 if args.apply_cut == 'ON':
-    cut_sample = apply_cut(y_true, X_true, X_pred, sample, metric='B-1')
+    cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, metric='B-1')
     samples    = [sample, cut_sample]
-    var_distributions(samples, args.output_dir, sig_bins=200, bkg_bins=600, var='M', normalize=False); sys.exit()
+    var_distributions(samples, args.output_dir, sig_bins=200, bkg_bins=600, var='M', normalize=False)
 
 
-# RESULTS PLOTTING
-if args.plotting != 'ON': sys.exit()
-if not os.path.isdir(args.output_dir): os.mkdir(args.output_dir)
-metrics_list = ['JSD', 'MSE', 'MAE', 'EMD', 'KLD', 'X-S'] + ['B-1', 'B-2']; #sample['weights'] = None
-processes = [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], args.output_dir))]
-for metric in metrics_list:
-    if metric == 'B-2': X_loss = loss_function(sample['jets'], X_pred, metric)
-    else              : X_loss = loss_function(    X_true    , X_pred, metric)
-    processes += [mp.Process(target=loss_distributions, args=(y_true,X_loss,metric,sample['weights'],args.output_dir))]
-    processes += [mp.Process(target=mass_correlation  , args=(y_true,X_loss,metric,sample['M']      ,args.output_dir))]
-for job in processes: job.start()
-for job in processes: job.join()
-ROC_curves(X_true, X_pred, y_true, sample, args.output_dir, metrics_list, wp=[1,10])
-
-
-'''
-from utils import best_cut, get_idx
-X_loss = loss_function(X_true, X_pred, metric='JSD')
-m_tuples = get_idx(300, n_sets=6)
-for m in m_tuples:
-    print(); print('Mass range:', m)
-    cuts = '(X_mass >= ' + str(m[0]) + ') & (X_mass <= ' + str(m[1]) + ')'
-    best_cut(y_true, X_loss, sample['M'], sample['weights'], cuts)
-sys.exit()
-'''
+# PLOTTING RESULTS
+if args.plotting == 'ON':
+    if not os.path.isdir(args.output_dir): os.mkdir(args.output_dir)
+    metrics = ['JSD'] + ['EMD', 'MSE', 'MAE', 'KLD', 'X-S'] + ['B-1', 'B-2']; #sample['weights'] = None
+    plot_results(y_true, X_true, X_pred, sample, metrics, args.output_dir)

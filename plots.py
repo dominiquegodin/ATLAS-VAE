@@ -3,7 +3,23 @@ import multiprocessing   as mp
 import matplotlib.pyplot as plt
 from matplotlib import pylab, ticker
 from sklearn    import metrics
-from utils      import loss_function, get_4v, apply_cut
+
+
+def plot_results(y_true, X_true, X_pred, sample, metrics, output_dir):
+    from utils import loss_function; print('PLOTTING RESULTS:')
+    manager    = mp.Manager(); X_losses = manager.dict()
+    arguments  = [((sample['jets'] if metric=='B-2' else X_true), X_pred, metric, X_losses) for metric in metrics]
+    processes  = [mp.Process(target=loss_function, args=arg) for arg in arguments]
+    for job in processes: job.start()
+    for job in processes: job.join()
+    processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
+    processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
+    arguments  = [(y_true, X_losses[metric], metric, sample['weights'], output_dir) for metric in metrics]
+    processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
+    arguments  = [(y_true, X_losses[metric], metric, sample[   'M'   ], output_dir) for metric in metrics]
+    processes += [mp.Process(target=mass_correlation  , args=arg) for arg in arguments]
+    for job in processes: job.start()
+    for job in processes: job.join()
 
 
 def var_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=True, density=True, log=True):
@@ -48,6 +64,7 @@ def var_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=Tr
 
 
 def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir):
+    from utils import get_4v
     pt_true = get_4v(X_true)['pt']; pt_pred = get_4v(X_pred)['pt']
     if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
     bin_width = 0.2
@@ -124,22 +141,20 @@ def mass_correlation(y_true, X_loss, metric, X_mass, output_dir, n_bins=100):
     print('Saving mass correlations  to:', file_name); plt.savefig(file_name)
 
 
-def get_rates(X_true, X_pred, y_true, weights, jets, metric, return_dict):
-    X_loss      = loss_function(X_true, X_pred, metric)
-    if metric == 'B-2': X_loss = loss_function(jets, X_pred, metric)
-    fpr, tpr, _ = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
+def get_rates(y_true, X_losses, weights, metric, return_dict):
+    fpr, tpr, _ = metrics.roc_curve(y_true, X_losses[metric], pos_label=0, sample_weight=weights)
     return_dict[metric] = {'fpr':fpr, 'tpr':tpr}
-def ROC_rates(X_true, y_true, X_pred, weights, jets, metrics_list):
+def ROC_rates(y_true, X_losses, weights, metrics_list):
     manager      = mp.Manager(); return_dict = manager.dict()
-    arguments    = [(X_true, y_true, X_pred, weights, jets, metric, return_dict) for metric in metrics_list]
+    arguments    = [(y_true, X_losses, weights, metric, return_dict) for metric in metrics_list]
     processes    = [mp.Process(target=get_rates, args=arg) for arg in arguments]
     for task in processes: task.start()
     for task in processes: task.join()
     return {metric:return_dict[metric] for metric in metrics_list}
-def ROC_curves(X_true, y_true, X_pred, sample, output_dir, metrics_list, wp):
+def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10]):
     colors_dict  = {'JSD':'tab:blue', 'MSE':'tab:green' , 'EMD':'tab:orange', 'B-1':'gray',
                     'KLD':'tab:red' , 'X-S':'tab:purple', 'MAE':'tab:brown' , 'B-2':'darkgray'}
-    metrics_dict = ROC_rates(X_true, y_true, X_pred, sample['weights'], sample['jets'], metrics_list)
+    metrics_dict = ROC_rates(y_true, X_losses, weights, metrics_list)
     plt.figure(figsize=(11,15))
     plt.subplot(2, 1, 1); pylab.grid(True); axes = plt.gca()
     for metric in metrics_list:

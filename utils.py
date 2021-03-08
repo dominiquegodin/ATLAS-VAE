@@ -13,8 +13,9 @@ def make_sample(bkg_idx, sig_idx, bkg_cuts, sig_cuts, bkg, sig, normalization=Tr
     sig_file   = data_path + '/' + data_files[sig]
     if np.isscalar(bkg_idx): bkg_idx = (0, bkg_idx)
     if np.isscalar(sig_idx): sig_idx = (0, sig_idx)
-    if sig_idx[0] != sig_idx[1]: sig_sample = load_data(sig_file, 'constituents', sig_idx, cuts=sig_cuts)
-    if bkg_idx[0] != bkg_idx[1]: bkg_sample = load_data(bkg_file, 'constituents', bkg_idx, cuts=bkg_cuts)
+    print()
+    if sig_idx[0] != sig_idx[1]: sig_sample = load_data(sig_file, 'constituents', sig, sig_idx, cuts=sig_cuts)
+    if bkg_idx[0] != bkg_idx[1]: bkg_sample = load_data(bkg_file, 'constituents', bkg, bkg_idx, cuts=bkg_cuts)
     if   'sig_sample' not in locals():
         sample = bkg_sample
     elif 'bkg_sample' not in locals():
@@ -33,10 +34,12 @@ def upsampling(sample, target_size):
     return {key: np.take(sample[key], indices, axis=0) for key in sample}
 
 
-def load_data(data_file, data_key, idx, n_constituents=20, cuts='', multiprocess=True):
+def load_data(data_file, data_key, sample_type, idx, n_constituents=20, cuts='', multiprocess=True):
+    print('Loading', sample_type, 'sample', end=' --> ', flush=True); start_time = time.time()
     if multiprocess:
         def get_data(data_file, data_key, idx, n_constituents, return_dict):
-            return_dict[idx] = h5py.File(data_file,"r")[data_key][idx[0]:idx[1],:4*n_constituents]
+            sample = h5py.File(data_file,"r")[data_key][idx[0]:idx[1],:4*n_constituents]
+            return_dict[idx] = np.float16(sample)
         size       = min(len(h5py.File(data_file,"r")[data_key]),idx[1]-idx[0])
         idx_tuples = get_idx(size, start_val=idx[0], n_sets=mp.cpu_count())
         manager    = mp.Manager(); return_dict = manager.dict()
@@ -46,7 +49,7 @@ def load_data(data_file, data_key, idx, n_constituents=20, cuts='', multiprocess
         for task in processes: task.join()
         sample = np.concatenate([return_dict[idx] for idx in idx_tuples])
     else:
-        sample = h5py.File(data_file,"r")[data_key][idx[0]:idx[1],:4*n_constituents]
+        sample = data[data_key][idx[0]:idx[1],:4*n_constituents]
     sample = {'jets':sample, **{key:val for key,val in jets_4v(sample).items()}}
     data   = h5py.File(data_file,"r")
     if 'weights' in data: sample['weights'] = data['weights'][idx[0]:idx[1]]
@@ -55,6 +58,7 @@ def load_data(data_file, data_key, idx, n_constituents=20, cuts='', multiprocess
     else                : sample[  'JZW'  ] =         np.full(len(sample['jets']),-1)
     sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
     if cuts != '': sample = {key:sample[key][eval(cuts)] for key in sample}
+    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
 
 
@@ -136,22 +140,24 @@ def jets_3v(sample, idx=[0,None]):
     return np.concatenate([n[...,np.newaxis] for n in [pt, y, phi]], axis=2)
 
 
-def loss_function(P, Q, metric, delta=1e-16):
-    if metric == 'B-1' or metric == 'B-2': return np.mean(P, axis=1)
-    if metric == 'JSD' or metric == 'EMD':
+def loss_function(P, Q, metric, X_losses=None, delta=1e-16, multiprocess=True):
+    if metric in ['KLD', 'X-S']: P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
+    if metric in ['B-1', 'B-2']: loss = np.mean(P, axis=1)
+    if metric in ['JSD', 'EMD']:
         idx_tuples = get_idx(len(P), n_sets=mp.cpu_count())
         target     = JSD if metric == 'JSD' else EMD
         manager    = mp.Manager(); return_dict = manager.dict()
         processes  = [mp.Process(target=target, args=(P, Q, idx, return_dict)) for idx in idx_tuples]
         for task in processes: task.start()
         for task in processes: task.join()
-        return np.concatenate([return_dict[idx] for idx in idx_tuples])
-    if metric == 'MSE'   : return np.mean(      (P - Q)**2, axis=1)
-    if metric == 'MAE'   : return np.mean(np.abs(P - Q)   , axis=1)
-    P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
-    if metric == 'KLD'   : return np.mean(P*np.log(P/Q)   , axis=1)
-    if metric == 'X-S'   : return np.mean(P*np.log(1/Q)   , axis=1)
-    if metric == 'DeltaE': return jets_4v(P)['E'] - jets_4v(Q)['E']
+        loss = np.concatenate([return_dict[idx] for idx in idx_tuples])
+    if metric == 'MSE'   : loss = np.mean(      (P - Q)**2, axis=1)
+    if metric == 'MAE'   : loss = np.mean(np.abs(P - Q)   , axis=1)
+    if metric == 'KLD'   : loss = np.mean(P*np.log(P/Q)   , axis=1)
+    if metric == 'X-S'   : loss = np.mean(P*np.log(1/Q)   , axis=1)
+    if metric == 'DeltaE': loss = jets_4v(P)['E'] - jets_4v(Q)['E']
+    if multiprocess: X_losses[metric] = loss
+    else: return loss
 
 
 def fit_scaler(sample, scaler_out, reshape=True):
@@ -162,14 +168,48 @@ def fit_scaler(sample, scaler_out, reshape=True):
     print('Saving quantile transform to', scaler_out)
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
-def apply_scaler(sample, scaler, reshape=True):
-    print('Applying quantile transform', end=' --> ', flush=True); start_time = time.time()
+def apply_scaler(sample, scaler, idx=(0,None), return_dict=None, reshape=True):
+    if idx == (0,None):
+        print('Applying quantile transform', end=' --> ', flush=True)
+        start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,4))
     sample = scaler.transform(sample)
     sample = np.reshape(sample, shape)
+    if idx == (0,None): print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+    if idx == (0,None): return sample
+    else: return_dict[idx] = sample
+def apply_scaling(sample, scaler, reshape=True):
+    print('Applying quantile transform', end=' --> ', flush=True); start_time = time.time()
+    idx_tuples = get_idx(len(sample), start_val=0, n_sets=mp.cpu_count())
+    manager    = mp.Manager(); return_dict = manager.dict()
+    arguments  = [(sample[idx[0]:idx[1]], scaler, idx, return_dict, reshape) for idx in idx_tuples]
+    processes  = [mp.Process(target=apply_scaler, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    sample = np.concatenate([return_dict[idx] for idx in idx_tuples])
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
+'''
+def apply_scaling(sample, scaler, reshape=True):
+    from functools import partial; from multiprocessing import sharedctypes, Pool
+    global fill_sample
+    def fill_sample(scaler, reshape, idx):
+        tmp = np.ctypeslib.as_array(shared_array)
+        scaled = sample[idx[0]:idx[1],:]
+        shape  = scaled.shape
+        if reshape: scaled = np.reshape(scaled, (-1,4))
+        scaled = scaler.transform(scaled)
+        tmp[idx[0]:idx[1],:] = np.reshape(scaled, shape)
+    print('Applying quantile transform', end=' --> ', flush=True); start_time = time.time()
+    scaled_sample = np.ctypeslib.as_ctypes(np.empty(sample.shape, dtype=np.float32))
+    shared_array  = sharedctypes.RawArray(scaled_sample._type_, scaled_sample)
+    idx_tuples    = get_idx(len(sample), start_val=0, n_sets=mp.cpu_count())
+    pool = Pool(); pool.map(partial(fill_sample, scaler, reshape), idx_tuples)
+    scaled_sample = np.ctypeslib.as_array(shared_array)
+    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+    return scaled_sample
+'''
 def inverse_scaler(sample, scaler, reshape=True):
     print('\nInversing quantile transform', end=' --> ', flush=True); start_time = time.time()
     shape = sample.shape
@@ -180,7 +220,7 @@ def inverse_scaler(sample, scaler, reshape=True):
     return sample
 
 
-def best_cut(y_true, X_loss, X_mass, weights, cuts=''):
+def best_threshold(y_true, X_loss, X_mass, weights, cuts=''):
     #cuts = '(X_mass >= 140) & (X_mass <= 200)'
     if cuts != '':
         y_true  = y_true [eval(cuts)]
@@ -195,9 +235,9 @@ def best_cut(y_true, X_loss, X_mass, weights, cuts=''):
     return thresholds[np.argmax(ratios)]
 
 
-def apply_cut(y_true, X_true, X_pred, sample, metric):
+def apply_best_cut(y_true, X_true, X_pred, sample, metric):
     X_loss    = loss_function(X_true, X_pred, metric=metric)
-    loss_cuts = best_cut(y_true, X_loss, sample['M'], sample['weights'])
+    loss_cuts = best_threshold(y_true, X_loss, sample['M'], sample['weights'])
     print('Best', metric, 'cut:', metric, '>=', format(loss_cuts, '.3f'))
     sample = {key:sample[key][X_loss > loss_cuts] for key in sample}
     y_true = y_true[X_loss > loss_cuts]
