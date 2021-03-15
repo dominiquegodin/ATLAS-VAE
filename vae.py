@@ -31,7 +31,7 @@ parser.add_argument( '--n_gpus'        , default =       1, type = int          
 parser.add_argument( '--weight_type'   , default = None                          )
 parser.add_argument( '--scaling'       , default = 'ON'                          )
 parser.add_argument( '--apply_cut'     , default = 'OFF'                         )
-parser.add_argument( '--plotting'      , default = 'ON'                          )
+parser.add_argument( '--plotting'      , default = 'OFF'                         )
 parser.add_argument( '--output_dir'    , default = 'outputs'                     )
 parser.add_argument( '--model_in'      , default = ''                            )
 parser.add_argument( '--model_out'     , default = 'model.h5'                    )
@@ -112,7 +112,7 @@ X_pred = np.mean(X_pred, axis=2); print()
 
 # CUT ON RECONSTRUCTION LOSS
 if args.apply_cut == 'ON':
-    cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, metric='B-1')
+    cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, metric='JSD')
     samples    = [sample, cut_sample]
     var_distributions(samples, args.output_dir, sig_bins=200, bkg_bins=600, var='M', normalize=False)
 

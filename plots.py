@@ -92,7 +92,7 @@ def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir):
 
 def loss_distributions(y_true, X_loss, metric, weights, output_dir, n_bins=100):
     min_dict  = {'JSD':0  , 'MSE':0   , 'MAE':0  , 'EMD':0 , 'KLD':0  , 'X-S':0,   'B-1':0, 'B-2':0.0245}
-    max_dict  = {'JSD':0.3, 'MSE':0.16, 'MAE':0.3, 'EMD':30, 'KLD':0.3, 'X-S':0.5, 'B-1':1, 'B-2':0.0265}
+    max_dict  = {'JSD':0.3, 'MSE':0.16, 'MAE':0.3, 'EMD':25, 'KLD':0.3, 'X-S':0.5, 'B-1':1, 'B-2':0.0265}
     min_loss  = min_dict[metric]
     max_loss  = min(max_dict[metric], np.max(X_loss))
     bin_width = (max_loss-min_loss)/n_bins
@@ -118,7 +118,7 @@ def loss_distributions(y_true, X_loss, metric, weights, output_dir, n_bins=100):
 
 def mass_correlation(y_true, X_loss, metric, X_mass, output_dir, n_bins=100):
     min_dict = {'JSD':0  , 'MSE':0   , 'MAE':0  , 'EMD':0 , 'KLD':0  , 'X-S':0,   'B-1':0, 'B-2':0.0245}
-    max_dict = {'JSD':0.3, 'MSE':0.16, 'MAE':0.3, 'EMD':30, 'KLD':0.3, 'X-S':0.5, 'B-1':1, 'B-2':0.0265}
+    max_dict = {'JSD':0.3, 'MSE':0.16, 'MAE':0.3, 'EMD':25, 'KLD':0.3, 'X-S':0.5, 'B-1':1, 'B-2':0.0265}
     max_loss = min(max_dict[metric], np.max(X_loss))
     plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
     pylab.xlim(min_dict[metric], max_loss)
@@ -187,6 +187,9 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10]):
         fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
         len_0    = np.sum(fpr==0)
         gain     = tpr[len_0:]/fpr[len_0:]
+        #n_sig   = np.sum(weights[y_true==0])
+        #n_bkg   = np.sum(weights[y_true==1])
+        #sigma   = n_sig*tpr[len_0:]/np.sqrt(n_bkg*fpr[len_0:])
         max_gain = max(max_gain, np.max(gain[100*tpr[len_0:]>=1]))
         plt.plot(100*tpr[len_0:], gain, label=metric, lw=2, color=colors_dict[metric])
     pylab.xlim(1,100)
@@ -196,6 +199,8 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10]):
     axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('$G_{S/B}=\epsilon_{\operatorname{sig}}/\epsilon_{\operatorname{bkg}}$', fontsize=25)
+    #plt.ylabel('$\sigma=n_{\operatorname{sig}}\epsilon_{\operatorname{sig}}$/'
+    #           +'$\sqrt{n_{\operatorname{bkg}}\epsilon_{\operatorname{bkg}}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=12)
     plt.legend(loc='upper right', fontsize=16, ncol=2)
     file_name = output_dir+'/'+'ROC_curves.png'

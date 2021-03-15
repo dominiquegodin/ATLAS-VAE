@@ -81,7 +81,6 @@ def pt_weighting(pt, n_bins, density=True):
     pt        = np.float32(pt)
     bin_width = (np.max(pt) - np.min(pt)) / n_bins
     pt_bins   = [np.min(pt) + k*bin_width for k in np.arange(n_bins+1)]
-    #pt_bins   = list(np.arange(np.min(pt), np.max(pt), bin_width)) + [np.max(pt)+1e-3]
     pt_idx    = np.minimum(np.digitize(pt, pt_bins, right=False), len(pt_bins)-1) -1
     hist_pt   = np.histogram(pt, pt_bins, density=density)[0]
     weights   = 1/hist_pt[pt_idx]
@@ -131,7 +130,7 @@ def EMD(P, Q, idx, return_dict, n_iter=int(1e7)):
 def jets_3v(sample, idx=[0,None]):
     sample = np.float32(sample[idx[0]:idx[1]])
     sample = np.reshape(sample, (-1,int(sample.shape[1]/4),4))
-    px, py, pz, E = [sample[...,n] for n in np.arange(4)]
+    E, px, py, pz = [sample[...,n] for n in np.arange(4)]
     pt = np.sqrt(px**2 + py**2)
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
@@ -140,7 +139,7 @@ def jets_3v(sample, idx=[0,None]):
     return np.concatenate([n[...,np.newaxis] for n in [pt, y, phi]], axis=2)
 
 
-def loss_function(P, Q, metric, X_losses=None, delta=1e-16, multiprocess=True):
+def loss_function(P, Q, metric, X_losses=None, delta=1e-16, multiloss=True):
     if metric in ['KLD', 'X-S']: P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
     if metric in ['B-1', 'B-2']: loss = np.mean(P, axis=1)
     if metric in ['JSD', 'EMD']:
@@ -156,7 +155,7 @@ def loss_function(P, Q, metric, X_losses=None, delta=1e-16, multiprocess=True):
     if metric == 'KLD'   : loss = np.mean(P*np.log(P/Q)   , axis=1)
     if metric == 'X-S'   : loss = np.mean(P*np.log(1/Q)   , axis=1)
     if metric == 'DeltaE': loss = jets_4v(P)['E'] - jets_4v(Q)['E']
-    if multiprocess: X_losses[metric] = loss
+    if multiloss: X_losses[metric] = loss
     else: return loss
 
 
@@ -230,13 +229,11 @@ def best_threshold(y_true, X_loss, X_mass, weights, cuts=''):
     len_0      = np.sum(fpr==0)
     thresholds = thresholds[len_0:]       [tpr[len_0:]>0.01]
     ratios     = (tpr[len_0:]/fpr[len_0:])[tpr[len_0:]>0.01]
-    #print('Best wp:', format(thresholds[np.argmax(ratios)],'.3f'))
-    #print('Best gain:', format(np.max(ratios),'.2f'))
     return thresholds[np.argmax(ratios)]
 
 
 def apply_best_cut(y_true, X_true, X_pred, sample, metric):
-    X_loss    = loss_function(X_true, X_pred, metric=metric)
+    X_loss    = loss_function(X_true, X_pred, metric=metric, multiloss=False)
     loss_cuts = best_threshold(y_true, X_loss, sample['M'], sample['weights'])
     print('Best', metric, 'cut:', metric, '>=', format(loss_cuts, '.3f'))
     sample = {key:sample[key][X_loss > loss_cuts] for key in sample}
