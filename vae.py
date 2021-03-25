@@ -75,10 +75,10 @@ if args.n_epochs > 0:
         try: os.mkdir(path)
         except FileExistsError: pass
     sig_bins, bkg_bins = 50, 100; log = args.weight_type!='flat_pt'
-    print('TRAINING SAMPLE:')
+    print('\nTRAINING SAMPLE:')
     train_sample = make_sample(args.n_train, args.n_W, bkg_cuts, sig_cuts, bkg='qcd', sig='W')
     train_sample = {key:utils.shuffle(train_sample[key], random_state=0) for key in train_sample}
-    print('VALIDATION SAMPLE:')
+    print('\nVALIDATION SAMPLE:')
     valid_sample = make_sample(args.n_valid, args.n_W, bkg_cuts, sig_cuts, bkg='qcd', sig='W')
     train_sample = reweight_sample(train_sample, sig_bins, bkg_bins, args.weight_type)
     var_distributions(train_sample, args.output_dir, sig_bins, bkg_bins, var='pt', log=log)
@@ -99,10 +99,11 @@ if args.n_epochs > 0:
 # MODEL PREDICTIONS ON VALIDATION DATA
 print('\n+'+30*'-'+'+\n+--- TEST SAMPLE EVALUATION ---+\n+'+30*'-'+'+')
 sample = make_sample(args.n_test, args.n_top, bkg_cuts, sig_cuts, bkg='qcd', sig='top')
-y_true = np.int_(np.concatenate([np.zeros(np.sum(sample['JZW']==-1)), np.ones(np.sum(sample['JZW']>=0))]))
-#var_distributions(sample, args.output_dir, sig_bins=200, bkg_bins=600, var='pt'); sys.exit()
+#y_true = np.int_(np.concatenate([np.zeros(np.sum(sample['JZW']==-1)), np.ones(np.sum(sample['JZW']>=0))]))
+y_true = np.int_( np.where(sample['JZW']==-1, 0, 1) )
+#var_distributions(sample, args.output_dir, sig_bins=200, bkg_bins=600, var='pt', log=False); sys.exit()
 if args.scaling == 'ON': X_true = apply_scaling(sample['jets'], scaler); print()
-else                   : X_true =              sample['jets']
+else                   : X_true =               sample['jets']
 if args.n_iter > 1: print('Evaluating with', args.n_iter, 'iterations:')
 X_pred = np.empty(X_true.shape+(args.n_iter,), dtype=np.float32)
 for n in np.arange(args.n_iter):
@@ -112,7 +113,7 @@ X_pred = np.mean(X_pred, axis=2); print()
 
 # CUT ON RECONSTRUCTION LOSS
 if args.apply_cut == 'ON':
-    cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, metric='JSD')
+    cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, metric='JSD', cut_type='gain')
     samples    = [sample, cut_sample]
     var_distributions(samples, args.output_dir, sig_bins=200, bkg_bins=600, var='M', normalize=False)
 

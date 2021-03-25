@@ -24,13 +24,14 @@ def plot_results(y_true, X_true, X_pred, sample, metrics, output_dir):
 
 def var_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=True, density=True, log=True):
     labels = {0:[r'$t\bar{t}$', 'QCD','All'], 1:[r'$t\bar{t}$ (cut)', 'QCD (cut)','All (cut)']}
-    colors = {0:['tab:orange', 'tab:blue', 'tab:brown'], 1:['orange', 'skyblue', 'darkgoldenrod']}
+    colors = {0:['tab:orange', 'tab:blue', 'tab:brown'], 1:['gold', 'skyblue', 'darkgoldenrod']}
+    #colors = {0:['tab:orange', 'tab:blue', 'tab:brown'], 1:['orange', 'skyblue', 'darkgoldenrod']}
     n_bins = [sig_bins, bkg_bins, bkg_bins]
     xlabel = {'pt':'$p_t$', 'M':'$M$'}[var]
     plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
     if not isinstance(samples, list): samples = [samples]
-    for sample in samples:
-        for n in [0,1]:
+    for n in [0,1]:
+        for sample in samples:
             condition = sample['JZW']==-1 if n==0 else sample['JZW']>= 0 if n==1 else sample['JZW']>=-2
             if not np.any(condition): continue
             variable  = np.float32(sample[var][condition]); weights = sample['weights'][condition]
@@ -49,45 +50,59 @@ def var_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=Tr
             #pylab.xlim(0, 300); pylab.ylim(1e-5, 1e1)
             #pylab.xlim(0, 2000); pylab.ylim(1e-5, 1e0)
             pylab.xlim(0, 6000); pylab.ylim(1e-3, 1e-1)
-        else: pylab.xlim(0, 6000); pylab.ylim(0, 0.018)
+        else:
+            pylab.xlim(0, 6500); pylab.ylim(0, 0.02)
+            pylab.yticks(np.arange(0,0.025,0.005))
     else: pylab.xlim(0, 300); pylab.ylim(1e0, 1e7)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if not log: axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.tick_params(axis='both', which='major', labelsize=14)
     axes.tick_params(axis='both', which='major', labelsize=14)
     plt.xlabel(xlabel+' (GeV)', fontsize=24)
-    y_label = (' density' if normalize and density else '') + ' (' + ('%' if normalize else 'entries') + ')'
+    y_label = (' density' if normalize and density else '')+' ('+('%/GeV' if normalize else 'entries') + ')'
     plt.ylabel('Distribution' + y_label, fontsize=24)
-    plt.legend(loc='upper right', ncol=2, fontsize=18)
+    plt.legend(loc='upper right', ncol=1 if len(samples)==1 else 2, fontsize=18)
     file_name = output_dir+'/'+'var_distributions.png'
     print('\nSaving pt distributions to:', file_name, '\n'); plt.savefig(file_name)
 
 
-def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir):
+def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
     from utils import get_4v
     pt_true = get_4v(X_true)['pt']; pt_pred = get_4v(X_pred)['pt']
     if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
-    bin_width = 0.2
-    bins = list(np.arange(0, np.max(pt_true), bin_width))
-    bins = [0] + [n for n in bins if n > np.min(pt_true)] + [np.max(pt_true)+1e-3]
+    min_value = min(np.min(pt_true), np.min(pt_pred))
+    max_value = max(np.max(pt_true), np.max(pt_pred))
+    bin_width = (max_value - min_value) / n_bins
+    bins      = [min_value + k*bin_width for k in np.arange(n_bins+1)]
     plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
-    labels = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
+    labels = [r'$t\bar{t}$', 'QCD']; colors = {0:['tab:orange', 'gold'], 1:['tab:blue', 'skyblue']}
     for n in set(y_true):
         hist_weights  = weights[y_true==n]
-        hist_weights *= 100/np.sum(hist_weights)
+        hist_weights *= 100/np.sum(hist_weights)/bin_width
         pylab.hist(pt_true[y_true==n], bins, histtype='step', weights=hist_weights,
-                   label=labels[n], lw=2, color=colors[n])
+                   label=labels[n]         , lw=2, color=colors[n][0])
         pylab.hist(pt_pred[y_true==n], bins, histtype='step', weights=hist_weights,
-                   label=labels[n]+' (rec)', color=colors[n], lw=2, ls='--')
-    pylab.xlim(0, 2)
-    #plt.xticks(np.arange(10, 26, 5))
+                   label=labels[n]+' (rec)', lw=2, color=colors[n][1])
+    #pylab.xlim(0, 6000)
+    pylab.xlim(10, 20)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
     axes.tick_params(axis='both', which='major', labelsize=14)
-    plt.xlabel('$p_t$ (scaler space)', fontsize=24)
-    plt.ylabel('Distribution (%)', fontsize=24)
-    plt.legend(loc='upper right', fontsize=18)
+    plt.xlabel('$p_t$ (quantile space)', fontsize=24)
+    #plt.xlabel('$p_t$ (GeV)', fontsize=24)
+    plt.ylabel('Distribution density (%/GeV)', fontsize=24)
+    plt.legend(loc='upper center', ncol=2, fontsize=18)
     file_name = output_dir+'/'+'pt_reconstruction.png'
     print('Saving pt reconstruction  to:', file_name); plt.savefig(file_name)
+'''
+def quantile_reconstruction(y_true, X_true, X_pred, sample, scaler, output_dir):
+    from utils import inverse_scaler
+    #pt_reconstruction(X_true, X_pred, y_true, sample['weights'], output_dir)
+    #pt_reconstruction(X_true, X_pred, y_true, None             , output_dir)
+    #X_true = inverse_scaler(X_true, scaler)
+    #pt_reconstruction(sample['jets'], X_true, y_true, None, output_dir)
+    X_pred = inverse_scaler(X_pred, scaler)
+    pt_reconstruction(sample['jets'], X_pred, y_true, None, output_dir)
+'''
 
 
 def loss_distributions(y_true, X_loss, metric, weights, output_dir, n_bins=100):
@@ -102,7 +117,7 @@ def loss_distributions(y_true, X_loss, metric, weights, output_dir, n_bins=100):
     plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
     for n in set(y_true):
         hist_weights  = weights[y_true==n]
-        hist_weights *= 1/np.sum(hist_weights)/bin_width
+        hist_weights *= 100/np.sum(hist_weights)/bin_width
         pylab.hist(X_loss[y_true==n], bins, histtype='step', weights=hist_weights,
                    log=False, label=labels[n], color=colors[n], lw=2)
     pylab.xlim(min_dict[metric], max_loss)
@@ -110,7 +125,7 @@ def loss_distributions(y_true, X_loss, metric, weights, output_dir, n_bins=100):
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.tick_params(axis='both', which='major', labelsize=14)
     plt.xlabel(metric+' reconstruction loss', fontsize=24)
-    plt.ylabel('Distribution density', fontsize=24)
+    plt.ylabel('Distribution density (%)', fontsize=24)
     plt.legend(loc='upper left', fontsize=18)
     file_name = output_dir+'/'+metric+'_loss.png'
     print('Saving loss distributions to:', file_name); plt.savefig(file_name)
@@ -203,5 +218,6 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10]):
     #           +'$\sqrt{n_{\operatorname{bkg}}\epsilon_{\operatorname{bkg}}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=12)
     plt.legend(loc='upper right', fontsize=16, ncol=2)
+    #plt.legend(loc='upper left', fontsize=16, ncol=2)
     file_name = output_dir+'/'+'ROC_curves.png'
     print('Saving ROC curves         to:', file_name); plt.savefig(file_name)

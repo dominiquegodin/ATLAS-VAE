@@ -6,14 +6,14 @@ from   scipy.spatial import distance
 from   energyflow    import emd
 
 
-def make_sample(bkg_idx, sig_idx, bkg_cuts, sig_cuts, bkg, sig, normalization=True, upsample=False):
+def make_sample(bkg_idx, sig_idx, bkg_cuts, sig_cuts, bkg, sig, pt_scaling=False, upsample=False):
     data_path  = '/opt/tmp/godin/AD_data'
     data_files = {'qcd':'AtlasMCdijet36.h5', 'W':'resamples_oe_w.h5', 'top':'AtlasMCttbar.h5'}
+    #data_files = {'qcd':'scalars_qcd.h5', 'W':'resamples_oe_w.h5', 'top':'scalars_top.h5'}
     bkg_file   = data_path + '/' + data_files[bkg]
     sig_file   = data_path + '/' + data_files[sig]
     if np.isscalar(bkg_idx): bkg_idx = (0, bkg_idx)
     if np.isscalar(sig_idx): sig_idx = (0, sig_idx)
-    print()
     if sig_idx[0] != sig_idx[1]: sig_sample = load_data(sig_file, 'constituents', sig, sig_idx, cuts=sig_cuts)
     if bkg_idx[0] != bkg_idx[1]: bkg_sample = load_data(bkg_file, 'constituents', bkg, bkg_idx, cuts=bkg_cuts)
     if   'sig_sample' not in locals():
@@ -23,7 +23,7 @@ def make_sample(bkg_idx, sig_idx, bkg_cuts, sig_cuts, bkg, sig, normalization=Tr
     else:
         if sig=='W' and upsample: sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
         sample = {key:np.concatenate([sig_sample[key], bkg_sample[key]]) for key in bkg_sample}
-    if normalization: sample['jets'] /= sample['pt'][:,np.newaxis]
+    if pt_scaling: sample['jets'] /= sample['pt'][:,np.newaxis]
     #for key in sample: print(key, sample[key].shape)
     return sample
 
@@ -35,7 +35,7 @@ def upsampling(sample, target_size):
 
 
 def load_data(data_file, data_key, sample_type, idx, n_constituents=20, cuts='', multiprocess=True):
-    print('Loading', sample_type, 'sample', end=' --> ', flush=True); start_time = time.time()
+    print('Loading', format(sample_type,'^3s'), 'sample', end=' --> ', flush=True); start_time = time.time()
     if multiprocess:
         def get_data(data_file, data_key, idx, n_constituents, return_dict):
             sample = h5py.File(data_file,"r")[data_key][idx[0]:idx[1],:4*n_constituents]
@@ -49,7 +49,7 @@ def load_data(data_file, data_key, sample_type, idx, n_constituents=20, cuts='',
         for task in processes: task.join()
         sample = np.concatenate([return_dict[idx] for idx in idx_tuples])
     else:
-        sample = data[data_key][idx[0]:idx[1],:4*n_constituents]
+        sample = h5py.File(data_file,"r")[data_key][idx[0]:idx[1],:4*n_constituents]
     sample = {'jets':sample, **{key:val for key,val in jets_4v(sample).items()}}
     data   = h5py.File(data_file,"r")
     if 'weights' in data: sample['weights'] = data['weights'][idx[0]:idx[1]]
@@ -62,18 +62,17 @@ def load_data(data_file, data_key, sample_type, idx, n_constituents=20, cuts='',
     return sample
 
 
-def reweight_sample(sample, sig_bins, bkg_bins, weight_type='weights', sig_frac=0.1, density=True):
+def reweight_sample(sample, sig_bins, bkg_bins, weight_type='X-S', sig_frac=0.1, density=True):
     sig, bkg = sample['JZW']==-1, sample['JZW']>=0
     if weight_type == None:
         sample['weights'] = np.ones(len(sample['weights']))
-    if weight_type == 'flat_pt' and np.any(sig):
-        sample['weights'][sig] = pt_weighting(sample['pt'][sample['JZW']==-1], sig_bins, density=density)
-    if weight_type == 'flat_pt' and np.any(bkg):
-        sample['weights'][bkg] = pt_weighting(sample['pt'][sample['JZW']>= 0], bkg_bins, density=density)
+    if weight_type == 'flat_pt':
+        if np.any(sig): sample['weights'][sig] = pt_weighting(sample['pt'][sig], sig_bins, density=density)
+        if np.any(bkg): sample['weights'][bkg] = pt_weighting(sample['pt'][bkg], bkg_bins, density=density)
     if np.any(sig) and np.any(bkg):
         sample['weights'][sig] *= np.sum(sample['weights'][bkg])/np.sum(sample['weights'][sig])
         sample['weights'][sig] *= sig_frac/(1-sig_frac)
-    #print( np.sum(np.isfinite(sample['weights'])==False), np.sum(sample['weights']<=0) )
+    #print( np.sum(np.isfinite(sample['weights'])==False) )
     return sample
 
 
@@ -210,7 +209,7 @@ def apply_scaling(sample, scaler, reshape=True):
     return scaled_sample
 '''
 def inverse_scaler(sample, scaler, reshape=True):
-    print('\nInversing quantile transform', end=' --> ', flush=True); start_time = time.time()
+    print('Inversing quantile transform', end=' --> ', flush=True); start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,4))
     sample = scaler.inverse_transform(sample)
@@ -219,7 +218,7 @@ def inverse_scaler(sample, scaler, reshape=True):
     return sample
 
 
-def best_threshold(y_true, X_loss, X_mass, weights, cuts=''):
+def best_threshold(y_true, X_loss, X_mass, weights, cut_type='gain', cuts=''):
     #cuts = '(X_mass >= 140) & (X_mass <= 200)'
     if cuts != '':
         y_true  = y_true [eval(cuts)]
@@ -227,14 +226,15 @@ def best_threshold(y_true, X_loss, X_mass, weights, cuts=''):
         weights = weights[eval(cuts)]
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
     len_0      = np.sum(fpr==0)
-    thresholds = thresholds[len_0:]       [tpr[len_0:]>0.01]
-    ratios     = (tpr[len_0:]/fpr[len_0:])[tpr[len_0:]>0.01]
-    return thresholds[np.argmax(ratios)]
+    thresholds = thresholds[len_0:][tpr[len_0:]>0.01]
+    if cut_type=='gain' : cut_values = (tpr[len_0:]/fpr[len_0:])         [tpr[len_0:]>0.01]
+    if cut_type=='sigma': cut_values = (tpr[len_0:]/np.sqrt(fpr[len_0:]))[tpr[len_0:]>0.01]
+    return thresholds[np.argmax(cut_values)]
 
 
-def apply_best_cut(y_true, X_true, X_pred, sample, metric):
+def apply_best_cut(y_true, X_true, X_pred, sample, metric, cut_type='gain'):
     X_loss    = loss_function(X_true, X_pred, metric=metric, multiloss=False)
-    loss_cuts = best_threshold(y_true, X_loss, sample['M'], sample['weights'])
+    loss_cuts = best_threshold(y_true, X_loss, sample['M'], sample['weights'], cut_type)
     print('Best', metric, 'cut:', metric, '>=', format(loss_cuts, '.3f'))
     sample = {key:sample[key][X_loss > loss_cuts] for key in sample}
     y_true = y_true[X_loss > loss_cuts]
