@@ -7,12 +7,12 @@ try: from ROOT import TLorentzVector
 except ModuleNotFoundError: pass
 
 
-def files_dict(main_path, paths):
+def get_files(main_path, paths):
     return {path.split('.')[2]: sorted([main_path+'/'+path+'/'+root_file+':nominal' for
             root_file in os.listdir(main_path+'/'+path)]) for path in paths}
 
 
-def get_data(root_list, var_list, jet_var, n_jets=50):
+def get_data(root_list, var_list, jet_var, n_jets=100):
     start_time = time.time()
     with mp.Pool() as pool:
         root_tuples = list(itertools.product(root_list, var_list))
