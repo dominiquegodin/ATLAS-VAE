@@ -5,7 +5,6 @@ source /cvmfs/atlas.cern.ch/repo/ATLASLocalRootBase/user/atlasLocalSetup.sh
 source $ATLAS_LOCAL_ROOT_BASE/packageSetups/localSetup.sh root
 
 
-
 # NUMPY SETUP
 export PATH="/lcg/storage15/software64/anaconda3-atlas16/bin:$PATH"
 export PYTHONHOME=/lcg/storage15/software64/anaconda3-atlas16

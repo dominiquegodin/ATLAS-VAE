@@ -26,13 +26,13 @@ if args.merging == 'ON': file_processing(output_path+'/'+dijet_label)
 
 
 # ROOT VARIABLES
-scalars  = ['rljet_m_comb'    , 'rljet_pt_calo'   , 'rljet_ECF3'      , 'rljet_C2'       , 'rljet_D2'         ,
-            'rljet_Tau1_wta'  , 'rljet_Tau2_wta'  , 'rljet_Tau3_wta'  , 'rljet_Tau32_wta', 'rljet_FoxWolfram2',
-            'rljet_PlanarFlow', 'rljet_Angularity', 'rljet_Aplanarity', 'rljet_ZCut12'   , 'rljet_Split12'    ,
-            'rljet_Split23'   , 'rljet_KtDR'      , 'rljet_Qw'        , 'rljet_eta'      , 'rljet_phi'        ,
-            'weight_mc'       , 'weight_pileup'   , 'rljet_n_constituents', 'rljet_topTag_DNN19_qqb_score'    ]
-jet_var  = ['rljet_assoc_cluster_pt', 'rljet_assoc_cluster_eta', 'rljet_assoc_cluster_phi'                    ]
-
+scalars = ['rljet_m_comb'    , 'rljet_pt_calo'   , 'rljet_ECF3'      , 'rljet_C2'       , 'rljet_D2'         ,
+           'rljet_Tau1_wta'  , 'rljet_Tau2_wta'  , 'rljet_Tau3_wta'  , 'rljet_Tau32_wta', 'rljet_FoxWolfram2',
+           'rljet_PlanarFlow', 'rljet_Angularity', 'rljet_Aplanarity', 'rljet_ZCut12'   , 'rljet_Split12'    ,
+           'rljet_Split23'   , 'rljet_KtDR'      , 'rljet_Qw'        , 'rljet_eta'      , 'rljet_phi'        ]
+jet_var = ['rljet_assoc_cluster_pt', 'rljet_assoc_cluster_eta', 'rljet_assoc_cluster_phi'                    ]
+others  = ['weight_mc', 'weight_pileup', 'rljet_topTag_DNN19_qqb_score', 'rljet_topTag_TopoTagger_score'     ]
+others += ['rljet_n_constituents']
 
 # QCD AND TOP TAGS
 qcd_tags = ['361023', '361024', '361025', '361026', '361027',
@@ -60,10 +60,10 @@ root_list  = np.concatenate([files_dict[tag] for tag in tag_list])
 
 
 # READING AND PROCESSING ROOT DATA
-var_list  = scalars + jet_var
+var_list  = scalars + jet_var + others
 root_data = get_data(root_list, var_list, jet_var)
 if np.all([n in var_list for n in jet_var]):
-    root_data['constituents'] = final_jets({key:root_data.pop(key) for key in jet_var})
+    root_data.update(final_jets({key:root_data.pop(key) for key in jet_var}))
 root_data['weights'] = args.luminosity*root_data.pop('weight_mc')*root_data.pop('weight_pileup')
 #for key in root_data: print(format(key,'28s'), root_data[key].shape, root_data[key].dtype)
 

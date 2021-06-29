@@ -35,7 +35,7 @@ def root_conversion(jet_var, n_jets, root_tuple):
 
 
 def weights_factor(jet_tag):
-    #DIJET simulation (en ordre de dataset : JZ3,JZ4,JZ5....)
+    #DIJET simulation (en ordre de dataset: JZ3, JZ4, JZ5....)
     DSIDsDijets        = ['361023', '361024', '361025', '361026', '361027',
                           '361028', '361029', '361030', '361031', '361032']
     crossSecDijet      = [26454000000.00, 254630000.000, 4553500.0000, 257530.000000, 16215.0000000,
@@ -59,7 +59,7 @@ def weights_factor(jet_tag):
 def final_jets(jets):
     start_time = time.time()
     jets = np.concatenate([jets[key][...,np.newaxis] for key in jets          ], axis=2)
-    jets = np.concatenate([jets, np.zeros_like(jets[...,:1], dtype=np.float16)], axis=2)
+    jets = np.concatenate([jets, np.zeros_like(jets[...,:1], dtype=np.float32)], axis=2)
     manager    = mp.Manager(); return_dict = manager.dict()
     idx_tuples = get_idx(len(jets), n_sets=mp.cpu_count())
     arguments  = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
@@ -67,8 +67,8 @@ def final_jets(jets):
     for task in processes: task.start()
     for task in processes: task.join()
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    jets = np.concatenate([return_dict[idx] for idx in idx_tuples])
-    return np.reshape(jets,(jets.shape[0],-1))
+    return {key:np.concatenate([return_dict[idx][key] for idx in idx_tuples])
+            for key in return_dict[idx_tuples[0]]}
 
 
 def get_idx(size, start_val=0, n_sets=8):
@@ -82,7 +82,16 @@ def transform_jets(jets, idx, return_dict):
         jets[n,...] = jet_pt_ordering(jets[n,...])
         jets[n,...] = jet_Lorentz_4v (jets[n,...])
         jets[n,...] = jet_processing (jets[n,...])
-    return_dict[idx] = jets
+    return_dict[idx] = {'jets':np.float16(np.reshape(jets,(jets.shape[0],-1))),
+                        **{key:val for key,val in get_4v(jets).items()}}
+
+
+def get_4v(sample):
+    sample = np.sum(sample, axis=1)
+    E, px, py, pz = [sample[:,n] for n in np.arange(sample.shape[-1])]
+    pt = np.sqrt(px**2 + py**2)
+    M  = np.sqrt(np.maximum(0, E**2 - px**2 - py**2 - pz**2))
+    return {'E':E, 'pt':pt, 'M':M}
 
 
 def jet_pt_ordering(jet):
