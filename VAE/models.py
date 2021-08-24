@@ -1,5 +1,5 @@
 import numpy as np, tensorflow as tf, sys
-from   tensorflow.keras.layers import Conv2D, Conv3D, MaxPooling2D, MaxPooling3D, LeakyReLU, UpSampling2D, Reshape
+from   tensorflow.keras.layers import Conv2D, Conv3D, MaxPooling2D, MaxPooling3D, ReLU, UpSampling2D, Reshape
 from   tensorflow.keras.layers import Flatten, Dense, concatenate, Dropout, Activation, Layer, BatchNormalization
 from   tensorflow.keras        import Input, regularizers, models, callbacks, mixed_precision, losses, optimizers
 
@@ -22,30 +22,65 @@ def callback(model_out, patience, metrics):
     return calls + [callbacks.TerminateOnNaN()]
 
 
-def create_model(jets_dim, train_var, FC_layers, lr, beta, seed, encoder, n_gpus):
-    if len(set(train_var)-{'jets'}) == 0: input_dim = jets_dim
-    elif 'jets' not in train_var        : input_dim = len(train_var)
-    else                                : input_dim = jets_dim+len(train_var)-1
+def create_model(jets_dim, train_var, FC_layers, lr, beta, lamb, seed, encoder, n_gpus):
+    if len(set(train_var)-{'constituents'}) == 0: input_dim = jets_dim
+    elif 'constituents' not in train_var        : input_dim = len(train_var)
+    else                                        : input_dim = jets_dim+len(train_var)-1
     tf.debugging.set_log_device_placement(False)
     strategy = tf.distribute.MirroredStrategy(devices=['/gpu:'+str(n) for n in np.arange(n_gpus)])
     with strategy.scope():
-        loss = 'mean_squared_error' #'binary_crossentropy'
-        if encoder == 'dual':
+        #loss = 'mean_squared_error'
+        loss = 'binary_crossentropy'
+        if encoder == 'dual_ae':
             model = dual_AE(jets_dim, scalars_dim, FC_layers)
             model.compile(optimizer=optimizers.Adadelta(lr=lr), loss=loss, loss_weights=[1.0,1.0])
         else:
-            if encoder == 'ae'  : model = FC_AE (input_dim, FC_layers)
-            if encoder == 'vae' : model = FC_VAE(input_dim, FC_layers, beta, seed)
+            if encoder == 'oe_vae': model = FC_VAE(input_dim, FC_layers, beta, lamb, seed)
+            if encoder == 'vae'   : model = FC_VAE(input_dim, FC_layers, beta, seed)
+            if encoder == 'ae'    : model = FC_AE (input_dim, FC_layers)
             model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=False), loss=loss)
-            #model.compile(optimizer=optimizers.Adadelta(lr=lr), loss=loss)
+            #model.compile(optimizer=optimizers.Adam(lr=lr, amsgrad=False), loss=loss, loss_weights=[1.0,1.0])
         print('\nNEURAL NETWORK ARCHITECTURE'); model.summary(); print()
     return model
 
 
-def FC_AE(input_dim, FC_layers, batchNorm=True):
+def FC_VAE(input_dim, FC_layers, beta, lamb, seed, batchNorm=False):
     latent_dim = FC_layers[-1]; FC_layers = FC_layers[:-1]
     encoder_inputs = Input(shape=(input_dim,))
-    x              = encoder_inputs
+    oe_encoder_inputs = Input(shape=(input_dim,))
+    x = BatchNormalization()(encoder_inputs) if batchNorm else encoder_inputs
+    for n_neurons in FC_layers:
+        x = Dense(n_neurons, kernel_initializer='he_normal')(x)
+        if batchNorm: x = BatchNormalization()(x)
+        x = Activation('relu')(x)
+    qcd_mean       = Dense(latent_dim, name=  'mean' )(x)
+    qcd_log_var    = Dense(latent_dim, name='log_var')(x)
+    codings        = Sampling()([qcd_mean, qcd_log_var], seed)
+    encoder        = models.Model(inputs=encoder_inputs, outputs=[codings, qcd_mean, qcd_log_var])
+    decoder_inputs = Input(shape=latent_dim)
+    x = BatchNormalization()(decoder_inputs) if batchNorm else decoder_inputs
+    for n_neurons in FC_layers[::-1]:
+        x = Dense(n_neurons, kernel_initializer='he_normal')(x)
+        if batchNorm: x = BatchNormalization()(x)
+        x = Activation('relu')(x)
+    x = Dense(input_dim, activation='sigmoid')(x)
+    decoder        = models.Model(inputs=decoder_inputs, outputs=x)
+    codings, _, _  = encoder(encoder_inputs)
+    _, oe_mean, oe_log_var = encoder(oe_encoder_inputs)
+    reconstruction = decoder(codings)
+    autoencoder    = models.Model(inputs=[encoder_inputs,oe_encoder_inputs], outputs=reconstruction)
+
+    autoencoder.add_loss(beta*tf.reduce_mean(KL_loss(qcd_mean,qcd_log_var)))
+    oe_loss = tf.keras.activations.relu( KL_loss(qcd_mean,qcd_log_var)-KL_loss(oe_mean,oe_log_var)+1. )
+    autoencoder.add_loss( lamb*tf.reduce_mean(oe_loss) )
+
+    return autoencoder
+
+
+def FC_AE(input_dim, FC_layers, batchNorm=False):
+    latent_dim = FC_layers[-1]; FC_layers = FC_layers[:-1]
+    encoder_inputs = Input(shape=(input_dim,))
+    x = encoder_inputs
     for n_neurons in FC_layers:
         x = Dense(n_neurons, kernel_initializer='he_normal')(x)
         if batchNorm: x = BatchNormalization()(x)
@@ -58,39 +93,12 @@ def FC_AE(input_dim, FC_layers, batchNorm=True):
         x = Dense(n_neurons, kernel_initializer='he_normal')(x)
         if batchNorm: x = BatchNormalization()(x)
         x = Activation('relu')(x)
+    #x = Dense(input_dim, activation='linear')(x)
     x = Dense(input_dim, activation='sigmoid')(x)
     decoder = models.Model(inputs=decoder_inputs, outputs=x)
     codings        = encoder(encoder_inputs)
     reconstruction = decoder(codings)
     autoencoder    = models.Model(inputs=encoder_inputs, outputs=reconstruction)
-    return autoencoder
-
-
-def FC_VAE(input_dim, FC_layers, beta, seed, batchNorm=True):
-    latent_dim = FC_layers[-1]; FC_layers = FC_layers[:-1]
-    encoder_inputs = Input(shape=(input_dim,))
-    x = BatchNormalization()(encoder_inputs) if batchNorm else encoder_inputs
-    for n_neurons in FC_layers:
-        x = Dense(n_neurons, kernel_initializer='he_normal')(x)
-        if batchNorm: x = BatchNormalization()(x)
-        x = Activation('relu')(x)
-    mean           = Dense(latent_dim, name=  'mean' )(x)
-    log_var        = Dense(latent_dim, name='log_var')(x)
-    codings        = Sampling()([mean, log_var], seed)
-    encoder        = models.Model(inputs=encoder_inputs, outputs=codings)
-    decoder_inputs = Input(shape=latent_dim)
-    x = BatchNormalization()(decoder_inputs) if batchNorm else decoder_inputs
-    for n_neurons in FC_layers[::-1]:
-        x = Dense(n_neurons, kernel_initializer='he_normal')(x)
-        if batchNorm: x = BatchNormalization()(x)
-        x = Activation('relu')(x)
-    x = Dense(input_dim, activation='sigmoid')(x)
-    decoder        = models.Model(inputs=decoder_inputs, outputs=x)
-    codings        = encoder(encoder_inputs)
-    reconstruction = decoder(codings)
-    autoencoder    = models.Model(inputs=encoder_inputs, outputs=reconstruction)
-    #autoencoder.add_loss(beta*tf.reduce_mean(KL_loss(mean,log_var))/input_dim)
-    autoencoder.add_loss(beta*tf.reduce_mean(KL_loss(mean,log_var)))
     return autoencoder
 
 
@@ -145,26 +153,32 @@ def dual_AE(jets_dim, scalars_dim, FC_layers, batchNorm=False):
     return autoencoder
 
 
-
-
 '''
-def CNN_AE(input_dim, latent_dim):
-    encoder_inputs = Input(shape=(input_dim,)); x = encoder_inputs
-    x = Reshape([8,10,1])(x)
-    x = Conv2D(32, kernel_size=(3,3), padding='same', activation='selu')(x)
-    x = Conv2D(32, kernel_size=(3,3), padding='same', activation='selu')(x)
-    x = Flatten()(x)
-    x = Dense(32, activation='selu')(x)
-    x = Dense(latent_dim, activation='selu')(x)
-    x = Dense(32, activation='selu')(x)
-    x = Dense(2240, activation='selu')(x)
-    x = Reshape([5, 7, 64])(x)
-    x = Conv2D(32, kernel_size=(3,4), padding='valid', activation='selu')(x)
-    x = UpSampling2D((2,2))(x)
-    x = Conv2D(32, kernel_size=(3,4), padding='valid', activation='selu')(x)
-    x = UpSampling2D((2,2))(x)
-    x = Conv2D(1, kernel_size=(3,3), padding='same', activation='selu')(x)
-    x = Reshape((80,))(x)
-    x = Activation('sigmoid')(x)
-    return models.Model(inputs=encoder_inputs, outputs=x)
+def FC_VAE(input_dim, FC_layers, beta, seed, batchNorm=True):
+    latent_dim = FC_layers[-1]; FC_layers = FC_layers[:-1]
+    encoder_inputs = Input(shape=(input_dim,))
+    x = BatchNormalization()(encoder_inputs) if batchNorm else encoder_inputs
+    for n_neurons in FC_layers:
+        x = Dense(n_neurons, kernel_initializer='he_normal')(x)
+        if batchNorm: x = BatchNormalization()(x)
+        x = Activation('relu')(x)
+    mean           = Dense(latent_dim, name=  'mean' )(x)
+    log_var        = Dense(latent_dim, name='log_var')(x)
+    codings        = Sampling()([mean, log_var], seed)
+    encoder        = models.Model(inputs=encoder_inputs, outputs=codings)
+    decoder_inputs = Input(shape=latent_dim)
+    x = BatchNormalization()(decoder_inputs) if batchNorm else decoder_inputs
+    for n_neurons in FC_layers[::-1]:
+        x = Dense(n_neurons, kernel_initializer='he_normal')(x)
+        if batchNorm: x = BatchNormalization()(x)
+        x = Activation('relu')(x)
+    #x = Dense(input_dim, activation='linear')(x)
+    x = Dense(input_dim, activation='sigmoid')(x)
+    decoder        = models.Model(inputs=decoder_inputs, outputs=x)
+    codings = encoder(encoder_inputs)
+    reconstruction = decoder(codings)
+    autoencoder    = models.Model(inputs=encoder_inputs, outputs=reconstruction)
+    #autoencoder.add_loss(beta*tf.reduce_mean(KL_loss(mean,log_var))/input_dim)
+    autoencoder.add_loss(beta*tf.reduce_mean(KL_loss(mean,log_var)))
+    return autoencoder
 '''

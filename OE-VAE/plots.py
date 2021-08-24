@@ -1,55 +1,152 @@
 import numpy             as np
 import multiprocessing   as mp
 import matplotlib.pyplot as plt
-from matplotlib import pylab, ticker
-from sklearn    import metrics
+from matplotlib    import pylab, ticker
+from sklearn       import metrics
+from scipy.spatial import distance
+from scipy         import stats
+from utils         import loss_function, inverse_scaler, get_4v
 import sys
 
 
-def plot_results(y_true, X_true, X_pred, sample, train_var, n_dims, metrics, model, encoder, output_dir):
-    from utils import loss_function; print('PLOTTING RESULTS:')
-    manager    = mp.Manager(); X_losses = manager.dict()
-    X_true_dict = {metric:X_true for metric in metrics}
-    if len(set(train_var)-{'jets'}) == 0:
-        X_true_dict['B-1'] = sample['jets']
-    elif 'jets' not in train_var:
-        X_true_dict['B-1'] = sample['scalars']
-    else:
-        X_true_dict['B-1'] = np.concatenate([sample['jets'], sample['scalars']], axis=1)
-    for key in ['DNN', 'FCN']:
-        if key in metrics: X_true_dict[key] = sample[key]
-    arguments  = [(X_true_dict[metric], X_pred, n_dims, metric, X_losses) for metric in metrics]
-    processes  = [mp.Process(target=loss_function, args=arg) for arg in arguments]
+def plot_results(y_true, X_true, X_pred, sample, n_dims, metrics, model, output_dir):
+    print('PLOTTING RESULTS:')
+    manager     = mp.Manager(); X_losses = manager.dict()
+    X_true_dict = {metric:X_true for metric in metrics}; #X_true_dict['Inputs'] = sample['constituents']
+    arguments   = [(X_true_dict[metric], X_pred, n_dims, metric, X_losses) for metric in metrics]
+    processes   = [mp.Process(target=loss_function, args=arg) for arg in arguments]
     for job in processes: job.start()
     for job in processes: job.join()
-    if encoder == 'vae':
-        metrics           += ['Latent']
-        X_losses['Latent'] = latent_KL_loss(X_true, model)
-        #X_losses = {metric:X_losses[metric]+10*X_losses['Latent'] for metric in metrics}
+    # Adding latent space KLD metric
+    metrics   += ['Latent']; model(X_true); X_losses['Latent'] = model.losses[0].numpy()
     processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
     arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
     processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
-    arguments  = [(y_true, X_losses[metric], sample[   'M'   ], metric, output_dir) for metric in metrics]
-    processes += [mp.Process(target=mass_correlation  , args=arg) for arg in arguments]
+    arguments  = [(y_true, X_losses, sample['M'], metrics, output_dir)]
+    processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
     for job in processes: job.start()
     for job in processes: job.join()
 
 
-def latent_KL_loss(X_true, model):
-    from tensorflow.keras import models
-    from models import KL_loss
-    mean_layer    = models.Model(inputs=model.inputs, outputs=model.get_layer(name='mean'   ).output)
-    log_var_layer = models.Model(inputs=model.inputs, outputs=model.get_layer(name='log_var').output)
-    mean          = mean_layer   (np.float32(X_true))
-    log_var       = log_var_layer(np.float32(X_true))
-    #print(np.mean(mean, axis=0))
-    #print(np.sqrt(np.mean(np.exp(log_var), axis=0)))
-    return KL_loss(mean, log_var).numpy()
+def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
+    if metric in ['DNN', 'FCN']:
+        tagger_distributions(y_true, X_loss, weights, metric, output_dir)
+        return
+    min_dict = {'MSE':0  , 'MAE':0  , 'X-S'   :0  , 'JSD'   :0,   'EMD':0,
+                'KSD':0  , 'KLD':0  , 'Inputs':0  , 'Latent':0}
+    #max_dict = {'MSE':0.5, 'MAE':0.5, 'X-S'   :0.5, 'JSD'   :0.4, 'EMD':25,
+    #            'KSD':1.0, 'KLD':0.5, 'Inputs':1  , 'Latent':1e5}
+    max_dict = {'MSE':0.001, 'MAE':0.05, 'X-S'   :0.5, 'JSD'   :1, 'EMD':1,
+                'KSD':1.0, 'KLD':0.5, 'Inputs':0.02  , 'Latent':2e3}
+    min_loss  = min_dict[metric]
+    max_loss  = min(max_dict[metric], np.max(X_loss))
+    bin_width = (max_loss-min_loss)/n_bins
+    bins      = list(np.arange(min_loss, max_loss, bin_width)) + [max_loss]
+    labels    = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
+    if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
+    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    for n in set(y_true):
+        hist_weights  = weights[y_true==n]
+        hist_weights *= 100/np.sum(hist_weights)/bin_width
+        pylab.hist(X_loss[y_true==n], bins, histtype='step', weights=hist_weights, label=labels[n],
+                   log=True if metric in ['DNN', 'FCN'] else False, color=colors[n], lw=2)
+    pylab.xlim(min_dict[metric], max_loss)
+    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    axes.tick_params(axis='both', which='major', labelsize=14)
+    label = 'KLD latent loss' if metric=='Latent' else metric+' reconstruction loss'
+    plt.xlabel(label, fontsize=24)
+    plt.ylabel('Distribution density (%)', fontsize=24)
+    plt.legend(loc='upper right', fontsize=18)
+    file_name = output_dir+'/'+metric+'_loss.png'
+    print('Saving loss distributions to:', file_name); plt.savefig(file_name)
+
+
+def mass_correlation(y_true, X_losses, X_mass, metrics, output_dir, n_bins=100):
+    #metrics = ['JSD']
+    colors_dict = {'MSE':'tab:green', 'MAE'   :'tab:brown' , 'X-S'   :'tab:purple',
+                   'JSD':'tab:blue' , 'EMD'   :'tab:orange', 'KSD'   :'black'     ,
+                   'KLD':'tab:red'  , 'Inputs':'gray'      , 'Latent':'tab:cyan'}
+    #max_dict = {'MSE':0.5, 'MAE':0.5, 'X-S'   :0.5, 'JSD'   :0.4, 'EMD':25,
+    #            'KSD':1.0, 'KLD':0.5, 'Inputs':1  , 'Latent':1e5}
+    max_dict = {'MSE':0.001, 'MAE':0.05, 'X-S'   :0.5, 'JSD'   :1, 'EMD':1,
+                'KSD':1.0, 'KLD':0.5, 'Inputs':0.02  , 'Latent':2e3}
+    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    axes.tick_params(axis='both', which='major', labelsize=14)
+    plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
+    plt.ylabel('KS distance', fontsize=25)
+    labels = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
+    def get_KSD(y_true, X_losses, X_mass, metric, KSD_dict):
+        X_loss    = X_losses[metric]
+        min_loss  = np.min(X_loss)
+        max_loss  = min(max_dict[metric], np.max(X_loss))
+        bin_width = (max_loss-min_loss)/n_bins
+        losses    = [min_loss + k*bin_width for k in np.arange(n_bins)]
+        KSD = []; sig_eff = []; bkg_eff = []
+        for loss in losses:
+            sig_loss     = X_loss[y_true==0]
+            bkg_loss     = X_loss[y_true==1]
+            bkg_mass     = X_mass[y_true==1]
+            bkg_mass_cut = bkg_mass[bkg_loss>loss]
+            if len(bkg_mass_cut) != 0:
+                KSD     += [ stats.ks_2samp(bkg_mass, bkg_mass_cut)[0] ]
+                sig_eff += [ 100*np.sum(sig_loss>loss)/len(sig_loss)   ]
+                bkg_eff += [ 100*np.sum(bkg_loss>loss)/len(bkg_loss)   ]
+        KSD_dict[metric] = KSD, sig_eff, bkg_eff
+    manager   = mp.Manager(); KSD_dict = manager.dict()
+    arguments = [(y_true, X_losses, X_mass, metric, KSD_dict) for metric in metrics]
+    processes = [mp.Process(target=get_KSD, args=arg) for arg in arguments]
+    for job in processes: job.start()
+    for job in processes: job.join()
+    for metric in metrics:
+        label = str(metric)+(' metric' if len(metrics)==1 else '')
+        KSD, sig_eff, bkg_eff = KSD_dict[metric]
+        plt.plot(sig_eff, KSD, label=label, color=colors_dict[metric], lw=2)
+        if len(metrics) == 1:
+            for bkg_rej in [95,90,80,50]:
+                idx = (np.abs(100-np.array(bkg_eff) - bkg_rej)).argmin()
+                label = '$\epsilon_{\operatorname{bkg}}$: '+format(100-bkg_rej,'>2d')+'%'
+                plt.scatter(sig_eff[idx], KSD[idx], s=40, label=label, zorder=10)
+    '''
+    for metric in metrics:
+        X_loss    = X_losses[metric]
+        min_loss  = np.min(X_loss)
+        max_loss  = min(max_dict[metric], np.max(X_loss))
+        bin_width = (max_loss-min_loss)/n_bins
+        losses    = [min_loss + k*bin_width for k in np.arange(n_bins)]
+        KSD     = []
+        sig_eff = []
+        bkg_eff = []
+        for loss in losses:
+            sig_loss     = X_loss[y_true==0]
+            bkg_loss     = X_loss[y_true==1]
+            bkg_mass     = X_mass[y_true==1]
+            bkg_mass_cut = bkg_mass[bkg_loss>loss]
+            if len(bkg_mass_cut) != 0:
+                KSD     += [ stats.ks_2samp(bkg_mass, bkg_mass_cut)[0] ]
+                sig_eff += [ 100*np.sum(sig_loss>loss)/len(sig_loss)   ]
+                bkg_eff += [ 100*np.sum(bkg_loss>loss)/len(bkg_loss)   ]
+        label = str(metric)+(' metric' if len(metrics)==1 else '')
+        plt.plot(sig_eff, KSD, label=label, color=colors_dict[metric], lw=2)
+    if len(metrics) == 1:
+        for bkg_rej in [95,90,80,50]:
+            idx = (np.abs(100-np.array(bkg_eff) - bkg_rej)).argmin()
+            #label = '$1-\epsilon_{\operatorname{bkg}}$: '+format(bkg_rej/100,'.2f')
+            label = '$\epsilon_{\operatorname{bkg}}$: '+format(100-bkg_rej,'>2d')+'%'
+            plt.scatter(sig_eff[idx], KSD[idx], s=40, label=label)
+    '''
+    pylab.xlim(0, 100)
+    pylab.ylim(0, 1.0)
+    ncol = 1 if len(metrics)==1 else 2 if len(metrics)<9 else 3
+    plt.legend(loc='upper right', fontsize=15, ncol=ncol)
+    file_name = output_dir + '/' + 'mass_sculpting.png'
+    print('Saving mass correlations  to:', file_name); plt.savefig(file_name)
 
 
 def var_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=True, density=True, log=True):
     labels = {0:[r'$t\bar{t}$', 'QCD', 'All'], 1:[r'$t\bar{t}$ (cut)', 'QCD (cut)','All (cut)']}
+    labels = {0:[r'$W$', 'QCD', 'All'], 1:[r'$W$', 'QCD (cut)','All (cut)']}
     colors = ['tab:orange', 'tab:blue', 'tab:brown']; alphas = [1, 0.5]
     n_bins = [sig_bins, bkg_bins, bkg_bins]
     xlabel = {'pt':'$p_t$', 'M':'$M$'}[var]
@@ -73,14 +170,13 @@ def var_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=Tr
                        alpha=alphas[samples.index(sample)], label=labels[samples.index(sample)][n])
     if normalize:
         if log:
-            #pylab.xlim(0, 300); pylab.ylim(1e-5, 1e1)
             #pylab.xlim(0, 2000); pylab.ylim(1e-5, 1e0)
-            pylab.xlim(0, 2000); pylab.ylim(1e-5, 1e0)
+            pylab.xlim(0, 6000); pylab.ylim(1e-4, 1e-1)
         else:
-            #pylab.xlim(0, 6500); pylab.ylim(0, 0.02)
-            #pylab.yticks(np.arange(0,0.025,0.005))
-            pylab.xlim(0, 6000); pylab.ylim(0, 0.05)
-            pylab.yticks(np.arange(0,0.06,0.01))
+            pylab.xlim(0, 6000); pylab.ylim(0, 0.02)
+            pylab.yticks(np.arange(0,0.025,0.005))
+            #pylab.xlim(0, 6000); pylab.ylim(0, 0.05)
+            #pylab.yticks(np.arange(0,0.06,0.01))
     else: pylab.xlim(0, 300); pylab.ylim(1e-1, 1e7)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if not log: axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
@@ -95,7 +191,6 @@ def var_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=Tr
 
 
 def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
-    from utils import get_4v
     pt_true = get_4v(X_true)['pt']; pt_pred = get_4v(X_pred)['pt']
     if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
     min_value = min(np.min(pt_true), np.min(pt_pred))
@@ -113,7 +208,7 @@ def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
                    label=labels[n]+' (rec)', lw=2, color=colors[n], alpha=0.5)
     #pylab.xlim(0, 6000)
     #pylab.xlim(10, 24)
-    pylab.xlim(6, 18)
+    pylab.xlim(0.4, 0.5)
     #pylab.ylim(0, 0.5)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
     axes.tick_params(axis='both', which='major', labelsize=14)
@@ -125,7 +220,6 @@ def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
     print('Saving pt reconstruction  to:', file_name); plt.savefig(file_name)
 #'''
 def quantile_reconstruction(y_true, X_true, X_pred, sample, scaler, output_dir):
-    from utils import inverse_scaler
     pt_reconstruction(X_true, X_pred, y_true, sample['weights'], output_dir)
     #pt_reconstruction(X_pred, X_pred, y_true, None             , output_dir)
     #X_true = inverse_scaler(X_true, scaler)
@@ -135,78 +229,10 @@ def quantile_reconstruction(y_true, X_true, X_pred, sample, scaler, output_dir):
 #'''
 
 
-def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
-    if metric in ['DNN', 'FCN']:
-        tagger_distributions(y_true, X_loss, weights, metric, output_dir)
-        return
-    min_dict  = {'JSD':0  , 'MSE':0   , 'MAE':0     , 'EMD':0    , 'KLD':0  ,
-                 'X-S':0  , 'B-1':0   , 'B-2':0.0 , 'Latent':0 }
-    max_dict  = {'JSD':0.3, 'MSE':0.00005, 'MAE':0.3   , 'EMD':25   , 'KLD':0.3,
-                 'X-S':0.3, 'B-1':30 , 'B-2':0.005, 'Latent':0.5}
-
-    print( metric, np.min(X_loss[y_true==0]), np.max(X_loss[y_true==0]) )
-    print( metric, np.min(X_loss[y_true==1]), np.max(X_loss[y_true==1]) )
-
-    min_loss  = min_dict[metric]
-    max_loss  = min(max_dict[metric], np.max(X_loss))
-    bin_width = (max_loss-min_loss)/n_bins
-    bins      = list(np.arange(min_loss, max_loss, bin_width)) + [max_loss]
-    labels    = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
-    if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
-    for n in set(y_true):
-        hist_weights  = weights[y_true==n]
-        hist_weights *= 100/np.sum(hist_weights)/bin_width
-        pylab.hist(X_loss[y_true==n], bins, histtype='step', weights=hist_weights, label=labels[n],
-                   log=True if metric in ['DNN', 'FCN'] else False, color=colors[n], lw=2)
-    pylab.xlim(min_dict[metric], max_loss)
-    #pylab.xticks(np.arange(0,0.16,0.05))
-    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
-    axes.tick_params(axis='both', which='major', labelsize=14)
-    label = 'KLD latent loss' if metric=='Latent' else metric+' reconstruction loss'
-    plt.xlabel(label, fontsize=24)
-    plt.ylabel('Distribution density (%)', fontsize=24)
-    pylab.xlim(min_dict[metric], max_dict[metric])
-    plt.legend(loc='upper left', fontsize=18)
-    file_name = output_dir+'/'+metric+'_loss.png'
-    print('Saving loss distributions to:', file_name); plt.savefig(file_name)
-
-
-def mass_correlation(y_true, X_loss, X_mass, metric, output_dir, n_bins=100):
-    min_dict  = {'JSD':0  , 'MSE':0   , 'MAE':0     , 'EMD':0  , 'KLD':0  ,
-                 'X-S':0  , 'B-1':0   , 'B-2':0.016 , 'DNN':0  , 'FCN':0  , 'Latent':0}
-    max_dict  = {'JSD':0.3, 'MSE':0.00005, 'MAE':0.3   , 'EMD':25 , 'KLD':0.3,
-                 'X-S':0.3, 'B-1':0.1 , 'B-2':0.0175, 'DNN':100, 'FCN':100, 'Latent':30}
-    max_loss = min(max_dict[metric], np.max(X_loss))
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
-    pylab.xlim(min_dict[metric], max_loss)
-    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
-    axes.tick_params(axis='both', which='major', labelsize=14)
-    if   metric in ['DNN','FCN']: label = metric+' tagger (%)'; X_loss *= 100
-    elif metric == 'Latent'     : label = 'KLD latent loss'
-    else                        : label = metric+' reconstruction loss'
-    plt.xlabel('Cut on '+label, fontsize=24)
-    plt.ylabel('Mean jet mass (GeV)', fontsize=24)
-    labels = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
-    for n in set(y_true):
-        n_loss    = X_loss[y_true==n]
-        n_mass    = X_mass[y_true==n]
-        min_loss  = np.min(n_loss)
-        max_loss  = min(max_dict[metric], np.max(n_loss))
-        bin_width = (max_loss-min_loss)/n_bins
-        losses    = [min_loss + k*bin_width for k in np.arange(n_bins)]
-        masses    = [np.mean(n_mass[n_loss>=loss]) for loss in losses]
-        plt.plot(losses, masses, label=labels[n], color=colors[n], lw=2)
-    pylab.xlim(min_dict[metric], max_dict[metric])
-    plt.legend(loc='upper right', fontsize=18)
-    file_name = output_dir+'/'+metric+'_correlation.png'
-    print('Saving mass correlations  to:', file_name); plt.savefig(file_name)
-
-
 def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10], sigma=False):
-    colors_dict  = {'JSD':'tab:blue' , 'MSE':'tab:green', 'EMD':'tab:orange', 'KLD':'tab:red' , 'X-S':'tab:purple',
-                    'MAE':'tab:brown', 'B-1':'gray'     , 'B-2':'darkgray'  , 'DNN':'tab:pink', 'FCN':'tab:orange'}
-    colors_dict['Latent'] = 'tab:cyan'
+    colors_dict = {'MSE':'tab:green', 'MAE'   :'tab:brown' , 'X-S'   :'tab:purple',
+                   'JSD':'tab:blue' , 'EMD'   :'tab:orange', 'KSD'   :'black'     ,
+                   'KLD':'tab:red'  , 'Inputs':'gray'      , 'Latent':'tab:cyan'}
     metrics_dict = ROC_rates(y_true, X_losses, weights, metrics_list)
     plt.figure(figsize=(11,15))
     plt.subplot(2, 1, 1); pylab.grid(True); axes = plt.gca()
@@ -224,7 +250,6 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10], s
         axes.axhline(scores[n], xmin=wp[n]/100, xmax=1, ls='--', linewidth=1., color='gray')
         plt.text(100.4, scores[n], str(int(scores[n])), {'color':color, 'fontsize':12}, va="center", ha="left")
         axes.axvline(wp[n], ymin=0, ymax=np.log(scores[n])/np.log(1e4), ls='--', linewidth=1., color='gray')
-        #plt.text(wp[n], 0.735, str(int(wp[n])), {'color':'tab:blue', 'fontsize':12}, va="center", ha="center")
     pylab.xlim(0,100)
     pylab.ylim(1,1e3)
     plt.yscale('log')
@@ -233,7 +258,7 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10], s
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('$1/\epsilon_{\operatorname{bkg}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=12)
-    plt.legend(loc='upper right', fontsize=16, ncol=2 if len(metrics_list)<9 else 3)
+    plt.legend(loc='upper right', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
     plt.subplot(2, 1, 2); pylab.grid(True); axes = plt.gca()
     max_gain = 0
     for metric in metrics_list:
@@ -256,7 +281,7 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10], s
         location = 'upper right'
     else:
         axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
-        location = 'upper left'
+        location = 'upper right'
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     if sigma:
         plt.ylabel('$\sigma=n_{\operatorname{sig}}\epsilon_{\operatorname{sig}}$/'
@@ -264,7 +289,7 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10], s
     else:
         plt.ylabel('$G_{S/B}=\epsilon_{\operatorname{sig}}/\epsilon_{\operatorname{bkg}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=12)
-    plt.legend(loc=location, fontsize=16, ncol=2 if len(metrics_list)<9 else 3)
+    plt.legend(loc='upper left', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
     file_name = output_dir+'/'+'ROC_curves.png'
     print('Saving ROC curves         to:', file_name); plt.savefig(file_name)
 

@@ -7,7 +7,7 @@ from   root_utils import get_idx
 
 def file_processing(data_path, n_files=40, n_tasks=10):
     data_files = sorted([h5_file for h5_file in os.listdir(data_path) if '.h5' in h5_file])
-    n_jets     = [len(h5py.File(data_path+'/'+h5_file,'r')['jets']) for h5_file in data_files]
+    n_jets     = [len(h5py.File(data_path+'/'+h5_file,'r')['constituents']) for h5_file in data_files]
     idx_list   = [get_idx(jet, n_sets=n_files) for jet in n_jets]
     file_idx   = list(utils.shuffle(np.arange(n_files), random_state=0))
     merge_path = data_path+'/'+'merging'; os.mkdir(merge_path)
@@ -25,14 +25,14 @@ def file_processing(data_path, n_files=40, n_tasks=10):
 
 
 def mix_samples(data_path, data_files, idx_list, file_idx, out_idx):
-    type_dict = {'jets':np.float16, 'weights':np.float64, 'rljet_n_constituents':np.uint8}
+    type_dict = {'constituents':np.float16, 'weights':np.float64, 'rljet_n_constituents':np.uint8}
     keys = [key for key in h5py.File(data_path+'/'+data_files[0],'r')]
     for key in keys:
         sample_list = []
         for in_idx in utils.shuffle(np.arange(len(data_files)), random_state=out_idx):
             idx  = idx_list[in_idx][out_idx]
             data = h5py.File(data_path+'/'+data_files[in_idx],'r')[key]
-            if key == 'jets':
+            if key == 'constituents':
                 sample = np.zeros((idx[1]-idx[0],400))
                 sample[:,0:data.shape[1]] = data[idx[0]:idx[1]]
                 sample_list += [np.float16(sample)]; del sample
@@ -52,7 +52,7 @@ def mix_samples(data_path, data_files, idx_list, file_idx, out_idx):
 
 def merge_files(data_path):
     h5_files = sorted([h5_file for h5_file in os.listdir(data_path) if '.h5' in h5_file])
-    idx = np.cumsum([len(h5py.File(data_path+'/'+h5_file, 'r')['jets']) for h5_file in h5_files])
+    idx = np.cumsum([len(h5py.File(data_path+'/'+h5_file, 'r')['constituents']) for h5_file in h5_files])
     output_file = data_path.split('/')[-2]+'.h5'
     os.rename(data_path+'/'+h5_files[0], data_path+'/'+output_file)
     data = h5py.File(data_path+'/'+output_file, 'a')

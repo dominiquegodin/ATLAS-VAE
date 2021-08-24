@@ -1,13 +1,25 @@
 import numpy           as np
+import tensorflow      as tf
 import multiprocessing as mp
 import sys, h5py, time, pickle, warnings
 from   sklearn       import preprocessing, metrics
 from   scipy.spatial import distance
+from   scipy         import stats
 from   energyflow    import emd
-from   functools import partial
 
 
-def make_sample(bkg_idx, sig_idx, n_dims, metrics, train_var, n_jets, bkg_cuts, sig_cuts, bkg, sig):
+def make_datasets(train_sample, train_sample_OE, valid_sample, batch_size=1):
+    train_X       = (train_sample   ['constituents'], np.float32(train_sample   ['weights']))
+    train_X_OE    = (train_sample_OE['constituents'], np.float32(train_sample_OE['weights']))
+    train_dataset = tf.data.Dataset.from_tensor_slices( train_X + train_X_OE )
+    train_dataset = train_dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+    valid_X       = (valid_sample   ['constituents'], np.float32(valid_sample   ['weights']))
+    valid_dataset = tf.data.Dataset.from_tensor_slices( valid_X )
+    valid_dataset = valid_dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+    return train_dataset, valid_dataset
+
+
+def make_sample(n_dims, n_constituents, bkg, sig, bkg_idx, sig_idx, bkg_cuts='', sig_cuts=''):
     data_path  = '/opt/tmp/godin/AD_data'
     data_files = {'qcd':'Atlas_MC_dijet.h5', 'W':'resamples_oe_w.h5', 'top':'Atlas_MC_ttbar.h5'}
     bkg_file   = data_path + '/' + data_files[bkg]
@@ -15,86 +27,85 @@ def make_sample(bkg_idx, sig_idx, n_dims, metrics, train_var, n_jets, bkg_cuts, 
     if np.isscalar(bkg_idx): bkg_idx = (0, bkg_idx)
     if np.isscalar(sig_idx): sig_idx = (0, sig_idx)
     if sig_idx[0] != sig_idx[1]:
-        sig_sample = load_data(sig_file, sig, sig_idx, metrics, train_var, n_jets, cuts=sig_cuts)
+        sig_sample = load_data(sig_file, sig, sig_idx, n_constituents, cuts=sig_cuts)
     if bkg_idx[0] != bkg_idx[1]:
-        bkg_sample = load_data(bkg_file, bkg, bkg_idx, metrics, train_var, n_jets, cuts=bkg_cuts)
+        bkg_sample = load_data(bkg_file, bkg, bkg_idx, n_constituents, cuts=bkg_cuts)
     if   'sig_sample' not in locals():
         sample = bkg_sample
     elif 'bkg_sample' not in locals():
         sample = sig_sample
     else:
-        if sig=='W' and False: sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
+        if sig == 'W': sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
         sample = {key:np.concatenate([sig_sample[key], bkg_sample[key]])
-                  for key in set(sig_sample.keys()) & set(bkg_sample.keys())}
-    if 'jets' in sample:
-        #sample['jets'] /= sample['pt'][:,np.newaxis] #pt_scaling
-        if n_dims == 3:
-            shape = sample['jets'].shape
-            sample['jets'] = np.reshape(sample['jets']        , (-1,shape[1]//4,4))
-            sample['jets'] = np.reshape(sample['jets'][...,1:], (shape[0],-1)     )
+                  for key in set(sig_sample) & set(bkg_sample)}
+    # performing pt_scaling
+    if 'constituents' in sample and False:
+        sample['constituents'] = sample['constituents']/sample['pt'][:,np.newaxis]
+    if 'constituents' in sample and n_dims == 3:
+        shape = sample['constituents'].shape
+        sample['constituents'] = np.reshape(sample['constituents']        , (-1,shape[1]//4,4))
+        sample['constituents'] = np.reshape(sample['constituents'][...,1:], (shape[0],-1)     )
     return sample
 
 
-def load_data(data_file, sample_type, idx, metrics, train_var, n_jets, cuts=''):
+def load_data(data_file, sample_type, idx, n_constituents, cuts):
     print('Loading', format(sample_type,'^3s'), 'sample', end=' ', flush=True)
     data     = h5py.File(data_file,"r"); start_time = time.time()
-    data_var = set(train_var+['pt','M','weights','JZW']) & set(data)
-    sample   = {key:data[key][idx[0]:idx[1]] for key in data_var if key!='jets'}
-    if 'jets' in data_var: sample['jets'] = data['jets'][idx[0]:idx[1],:4*n_jets]
-    if sample_type == 'W':
-        sample['jets'] = data['constituents'][idx[0]:idx[1],:4*n_jets]
-        sample.update({key:val for key,val in jets_4v(sample['jets']).items()})
-    #sample['jets'] = data['jets'][idx[0]:idx[1],:4*n_jets]
-    #sample.update({key:val for key,val in jets_4v(sample['jets']).items()})
-    if 'DNN' in metrics and sample_type != 'W':
-        sample.update({'DNN':data['rljet_topTag_DNN19_qqb_score'][idx[0]:idx[1]]})
-    if 'FCN' in metrics and sample_type != 'W':
-        if sample_type == 'top': file_name = 'FCN_tagger_ttbar.pkl'
-        if sample_type == 'qcd': file_name = 'FCN_tagger_dijet.pkl'
-        probs = pickle.load(open('/opt/tmp/godin/AD_data'+'/'+file_name,'rb'))
-        sample.update({'FCN':probs[idx[0]:idx[1]]})
-    if 'weights' not in sample: sample['weights'] = np.full_like(sample['pt'], 1)
-    if   'JZW'   not in sample: sample[  'JZW'  ] = np.full_like(sample['pt'],-1)
-    sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
+    #data_var = set(['pt','M','weights','JZW']) & set(data)
+    sample   = {key:data[key][idx[0]:idx[1]] for key in data if key!='constituents'}
+    sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_constituents])
+    #if sample_type == 'W':
+    #print()
+    #print( sample_type, set(sample) & {'pt','M'}=={} )
+
+    if len(set(sample) & {'pt','M'}) == 0:
+        sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
+    if   'JZW'   not in sample: sample[  'JZW'  ] = np.full(len(sample['constituents']),-1)
+    if 'weights' not in sample: sample['weights'] = np.full(len(sample['constituents']), 1)
     cut_list = [np.full_like(sample['weights'], True)]
     for cut in cuts:
         try: cut_list.append(eval(cut))
         except KeyError: pass
     cuts = np.logical_and.reduce(cut_list)
-    if not np.all(cuts): sample = {key:sample[key][cuts] for key in sample}
-    if len(set(train_var)-{'jets'}) != 0:
-        sample['scalars'] = np.hstack([sample.pop(key)[:,np.newaxis] for key in train_var if key!='jets'])
+    sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
+    if not np.all(cuts):
+        sample = {key:sample[key][cuts] for key in sample}
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
 
 
 def upsampling(sample, target_size):
-    sample_size = len(list(sample.values())[0])
-    indices = np.random.choice(np.arange(sample_size), target_size, replace=sample_size<target_size)
-    return {key: np.take(sample[key], indices, axis=0) for key in sample}
+    source_size = len(list(sample.values())[0])
+    indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
+    sample['weights'] = sample['weights']*source_size/target_size
+    return {key:np.take(sample[key], indices, axis=0) for key in sample}
 
 
-def reweight_sample(sample, sig_bins, bkg_bins, weight_type='X-S', sig_frac=0.1, density=True):
+def reweight_sample(sample, sig_bins, bkg_bins, weight_type='X-S'):
     sig, bkg = sample['JZW']==-1, sample['JZW']>=0
-    if weight_type == None:
-        sample['weights'] = np.ones_like(sample['weights'])
+    if weight_type == None or weight_type == 'none':
+        if np.any(sig):
+            sig_weights = sample['weights'][sig]
+            sample['weights'][sig] = np.full(len(sig_weights), np.sum(sig_weights)/len(sig_weights))
+        if np.any(bkg):
+            bkg_weights = sample['weights'][bkg]
+            sample['weights'][bkg] = np.full(len(bkg_weights), np.sum(bkg_weights)/len(bkg_weights))
     if weight_type == 'flat_pt':
-        if np.any(sig): sample['weights'][sig] = pt_weighting(sample['pt'][sig], sig_bins, density=density)
-        if np.any(bkg): sample['weights'][bkg] = pt_weighting(sample['pt'][bkg], bkg_bins, density=density)
-    if np.any(sig) and np.any(bkg):
-        sample['weights'][sig] *= np.sum(sample['weights'][bkg])/np.sum(sample['weights'][sig])
-        sample['weights'][sig] *= sig_frac/(1-sig_frac)
+        if np.any(sig):
+            sample['weights'][sig] = pt_weighting(sample['pt'][sig], sample['weights'][sig], sig_bins)
+        if np.any(bkg):
+            sample['weights'][bkg] = pt_weighting(sample['pt'][bkg], sample['weights'][bkg], bkg_bins)
     return sample
 
 
-def pt_weighting(pt, n_bins, density=True):
+def pt_weighting(pt, xs_weights, n_bins, density=True):
     pt        = np.float32(pt)
     bin_width = (np.max(pt) - np.min(pt)) / n_bins
     pt_bins   = [np.min(pt) + k*bin_width for k in np.arange(n_bins+1)]
     pt_idx    = np.minimum(np.digitize(pt, pt_bins, right=False), len(pt_bins)-1) -1
     hist_pt   = np.histogram(pt, pt_bins, density=density)[0]
     weights   = 1/hist_pt[pt_idx]
-    return weights*len(weights)/np.sum(weights)
+    return weights*np.sum(xs_weights)/np.sum(weights)
 
 
 def weights_factors(JZW, data_file):
@@ -133,6 +144,14 @@ def JSD(P, Q, idx, n_dims, return_dict, reshape=False):
     else: return_dict[idx] = [distance.jensenshannon(P[n,:], Q[n,:]) for n in np.arange(idx[0],idx[1])]
 
 
+def KST(P, Q, idx, n_dims, return_dict, reshape=False):
+    if reshape:
+        P, Q = np.reshape(P, (-1,int(P.shape[1]/n_dims),n_dims)), np.reshape(Q, (-1,int(Q.shape[1]/n_dims),n_dims))
+        return_dict[idx] = [np.mean([stats.ks_2samp(P[n,:,m], Q[n,:,m])[0] for m in np.arange(n_dims)])
+                            for n in np.arange(idx[0],idx[1])]
+    else: return_dict[idx] = [stats.ks_2samp(P[n,:], Q[n,:])[0] for n in np.arange(idx[0],idx[1])]
+
+
 def EMD(P, Q, idx, n_dims, return_dict, n_iter=int(1e7)):
     jets_3v_pairs    = zip(jets_3v(P[idx[0]:idx[1]],n_dims), jets_3v(Q[idx[0]:idx[1]],n_dims))
     return_dict[idx] = [emd.emd_pot(P, Q, return_flow=False, n_iter_max=n_iter) for P, Q in jets_3v_pairs]
@@ -155,11 +174,11 @@ def jets_3v(sample, n_dims, idx=[0,None]):
 def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=True):
     if metric in ['KLD', 'X-S', 'JSD']:
         P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
-    if metric in ['B-1', 'B-2']: loss = np.mean(P, axis=1)
+    if metric in ['Inputs']: loss = np.mean(P, axis=1)
     if metric in ['DNN', 'FCN']: loss = P
-    if metric in ['JSD', 'EMD']:
-        idx_tuples = get_idx(len(P), n_sets=mp.cpu_count())
-        target     = JSD if metric == 'JSD' else EMD
+    if metric in ['JSD', 'KSD', 'EMD']:
+        idx_tuples = get_idx(len(P), n_sets=mp.cpu_count()//3)
+        target     = JSD if metric=='JSD' else KST if metric=='KSD' else EMD
         manager    = mp.Manager(); return_dict = manager.dict()
         processes  = [mp.Process(target=target, args=(P, Q, idx, n_dims, return_dict)) for idx in idx_tuples]
         for task in processes: task.start()
@@ -173,24 +192,23 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
     else: return loss
 
 
-def fit_scaler(sample, n_dims, scaler_out, reshape=True):
-    print('Fitting quantile transform', end=' ', flush=True); start_time = time.time()
+def fit_scaler(sample, n_dims, scaler_out, reshape=True, scaler_type='MaxAbsScaler'):
+    print('\nFitting', scaler_type, 'scaler', end=' ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
-    #scaler = preprocessing.QuantileTransformer(output_distribution='uniform', n_quantiles=10000, random_state=0)
-    scaler = preprocessing.MaxAbsScaler()
+    if scaler_type == 'QuantileTransformer':
+        scaler = preprocessing.QuantileTransformer(output_distribution='uniform', n_quantiles=10000, random_state=0)
+    if scaler_type == 'MaxAbsScaler':
+        scaler = preprocessing.MaxAbsScaler()
+    if scaler_type == 'RobustScaler':
+        scaler = preprocessing.RobustScaler()
     scaler.fit(sample)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    print('Saving quantile transform to', scaler_out)
+    print('Saving scaling to', scaler_out)
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
-def s_scaling(sample, scaler):
-    print('Applying scalars quantile transform', end=' ', flush=True); start_time = time.time()
-    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    sample = scaler.transform(sample)
-    return sample
-def apply_t_scaler(sample, n_dims, scaler, idx=(0,None), return_dict=None, reshape=True):
+def apply_scaler(sample, n_dims, scaler, idx=(0,None), return_dict=None, reshape=True):
     if idx == (0,None):
-        print('Applying topo-clusters quantile transform', end=' ', flush=True); start_time = time.time()
+        print('Applying scaler', end=' ', flush=True); start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     sample = scaler.transform(sample)
@@ -199,39 +217,19 @@ def apply_t_scaler(sample, n_dims, scaler, idx=(0,None), return_dict=None, resha
         print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
         return sample
     else: return_dict[idx] = sample
-def t_scaling(sample, n_dims, scaler, reshape=True):
-    print('Applying topo-clusters quantile transform', end=' ', flush=True); start_time = time.time()
+def scaling(sample, n_dims, scaler, reshape=True):
+    print('Applying scaler', end=' ', flush=True); start_time = time.time()
     idx_tuples = get_idx(len(sample), start_val=0, n_sets=mp.cpu_count())
     manager    = mp.Manager(); return_dict = manager.dict()
     arguments  = [(sample[idx[0]:idx[1]], n_dims, scaler, idx, return_dict, reshape) for idx in idx_tuples]
-    processes  = [mp.Process(target=apply_t_scaler, args=arg) for arg in arguments]
+    processes  = [mp.Process(target=apply_scaler, args=arg) for arg in arguments]
     for task in processes: task.start()
     for task in processes: task.join()
     sample = np.concatenate([return_dict[idx] for idx in idx_tuples])
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
-'''
-def apply_scaling(sample, scaler, reshape=True):
-    from functools import partial; from multiprocessing import sharedctypes, Pool
-    global fill_sample
-    def fill_sample(scaler, reshape, idx):
-        tmp = np.ctypeslib.as_array(shared_array)
-        scaled = sample[idx[0]:idx[1],:]
-        shape  = scaled.shape
-        if reshape: scaled = np.reshape(scaled, (-1,4))
-        scaled = scaler.transform(scaled)
-        tmp[idx[0]:idx[1],:] = np.reshape(scaled, shape)
-    print('Applying quantile transform', end=' ', flush=True); start_time = time.time()
-    scaled_sample = np.ctypeslib.as_ctypes(np.empty(sample.shape, dtype=np.float32))
-    shared_array  = sharedctypes.RawArray(scaled_sample._type_, scaled_sample)
-    idx_tuples    = get_idx(len(sample), start_val=0, n_sets=mp.cpu_count())
-    pool = Pool(); pool.map(partial(fill_sample, scaler, reshape), idx_tuples)
-    scaled_sample = np.ctypeslib.as_array(shared_array)
-    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    return scaled_sample
-'''
 def inverse_scaler(sample, n_dims, scaler, reshape=True):
-    print('Inversing quantile transform', end=' ', flush=True); start_time = time.time()
+    print('Applying inverse scaler', end=' ', flush=True); start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     sample = scaler.inverse_transform(sample)
@@ -276,8 +274,9 @@ def bump_hunter(y_true, sample, output_dir, m_range=[120,200]):
     data_hist, bin_edges = np.histogram(data, bins=50, range=m_range, weights=data_weights)
     bkg_hist , bin_edges = np.histogram(bkg , bins=50, range=m_range, weights= bkg_weights)
     start_time = time.time()
+    #BumpHunter1D class instance
     hunter = BH.BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
-                             npe=10000, nworker=1, seed=0, bins=bin_edges) #BumpHunter1D class instance
+                             npe=10000, nworker=1, seed=0, bins=bin_edges)
     hunter.bump_scan(data_hist, bkg_hist, is_hist=True)
     hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=output_dir+'/'+'bump_mc_weighted.png')
     hunter.print_bump_info()

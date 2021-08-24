@@ -82,7 +82,7 @@ def transform_jets(jets, idx, return_dict):
         jets[n,...] = jet_pt_ordering(jets[n,...])
         jets[n,...] = jet_Lorentz_4v (jets[n,...])
         jets[n,...] = jet_processing (jets[n,...])
-    return_dict[idx] = {'jets':np.float16(np.reshape(jets,(jets.shape[0],-1))),
+    return_dict[idx] = {'constituents':np.float16(np.reshape(jets,(jets.shape[0],-1))),
                         **{key:val for key,val in get_4v(jets).items()}}
 
 
