@@ -5,12 +5,11 @@ import sys, warnings
 from matplotlib    import pylab, ticker
 from sklearn       import metrics
 from scipy.spatial import distance
-from scipy         import stats
 from utils         import loss_function, inverse_scaler, get_4v
 
 
 def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, output_dir):
-    print('\nPLOTTING RESULTS:')
+    print('PLOTTING RESULTS:')
     manager = mp.Manager(); X_losses = manager.dict()
     X_true_dict = {metric:X_true for metric in metrics if metric!='Latent'}
     if False:
@@ -23,12 +22,12 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, output_
     if 'Latent' in metrics:
         model(X_true)
         X_losses['Latent'] = model.losses[0].numpy()
-    arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
-    processes  = [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     arguments  = [(y_true, X_losses, sample['M'], sample['weights'], metrics, output_dir)]
-    processes += [mp.Process(target=mass_sculpting, args=arg) for arg in arguments]
+    processes  = [mp.Process(target=mass_sculpting, args=arg) for arg in arguments]
     processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'gain' ))]
     processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'sigma'))]
+    #arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
+    #processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
     for job in processes: job.start()
     for job in processes: job.join()
@@ -62,10 +61,10 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
     print('Saving loss distributions to:', file_name); plt.savefig(file_name)
 
 
-def mass_distances(y_true, X_losses, X_mass, weights, metric, distances_dict, n_steps=100):
+def mass_distances(y_true, X_losses, X_mass, weights, metric, distances_dict, n_cuts=100):
     X_loss = X_losses[metric]
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
-    step = max(1,len(fpr)//n_steps)
+    step = max(1,len(fpr)//n_cuts)
     fpr, tpr, losses = fpr[::step], tpr[::step], thresholds[::step]
     bkg_loss    =  X_loss[y_true==1]
     bkg_mass    =  X_mass[y_true==1]
@@ -95,7 +94,7 @@ def mass_sculpting(y_true, X_losses, X_mass, weights, metrics_list, output_dir, 
             plt.plot(sig_eff, dist, label=label, color=colors_dict[metric], lw=2, zorder=1)
             if metric == wp_metric:
                 P = []; labels = []
-                for bkg_rej,marker in zip([95,90,80,50],['o','^','s','D']):
+                for bkg_rej,marker in zip([95,90,80,50], ['o','^','s','D']):
                     idx = (np.abs(100-np.array(bkg_eff) - bkg_rej)).argmin()
                     labels += ['$\epsilon_{\operatorname{bkg}}$: '+format(100-bkg_rej,'>2d')+'%']
                     color = colors_dict[metric]
@@ -304,7 +303,7 @@ def KS_distance(dist_1, dist_2, weights_1=None, weights_2=None):
     cdf_2     = weights_2[tuple([np.searchsorted(dist_2, dist_all, side='right')])]
     return np.max(np.abs(cdf_1 - cdf_2))
 
-
+'''
 def JS_distance(p, q, base=None, *, axis=0, keepdims=False):
     def xlogy(x, y):
         with np.errstate(invalid='ignore'):
@@ -327,43 +326,4 @@ def JS_distance(p, q, base=None, *, axis=0, keepdims=False):
     if base is not None:
         js /= np.log(base)
     return np.sqrt(js/2.0)
-
-
-'''
-def mass_sculpting(y_true, X_losses, X_mass, weights, metrics_list, output_dir):
-    colors_dict = {'MSE':'tab:green', 'MAE'   :'tab:brown' , 'X-S'   :'tab:purple',
-                   'JSD':'tab:blue' , 'EMD'   :'tab:orange', 'KSD'   :'black'     ,
-                   'KLD':'tab:red'  , 'Inputs':'gray'      , 'Latent':'tab:cyan'}
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
-    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
-    axes.tick_params(axis='both', which='major', labelsize=14)
-    plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
-    plt.ylabel('KSD (bkg)', fontsize=25)
-    labels = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
-
-    manager   = mp.Manager(); distances_dict = manager.dict()
-    arguments = [(y_true, X_losses, X_mass, weights, metric, distances_dict) for metric in metrics_list]
-    processes = [mp.Process(target=mass_distances, args=arg) for arg in arguments]
-    for job in processes: job.start()
-    for job in processes: job.join()
-
-    for metric in metrics_list:
-        label = str(metric)+(' metric' if len(metrics_list)==1 else '')
-        KSD, JSD, sig_eff, bkg_eff = distances_dict[metric]
-        plt.plot(sig_eff, KSD, label=label, color=colors_dict[metric], lw=2, zorder=1)
-        if metric == 'Latent':
-            P = []; labels = []
-            for bkg_rej,marker in zip([95,90,80,50],['o','^','s','D']):
-                idx = (np.abs(100-np.array(bkg_eff) - bkg_rej)).argmin()
-                labels += ['$\epsilon_{\operatorname{bkg}}$: '+format(100-bkg_rej,'>2d')+'%']
-                color = colors_dict[metric]
-                P += [plt.scatter(sig_eff[idx], KSD[idx], s=40, marker=marker, color=color, zorder=10)]
-            L = plt.legend(P, labels, loc='upper right', fontsize=14, ncol=1)
-    pylab.xlim(0, 100)
-    pylab.ylim(0, 1.0)
-    ncol = 1 if len(metrics_list)==1 else 2 if len(metrics_list)<9 else 3
-    plt.legend(loc='upper center', fontsize=15, ncol=ncol); plt.gca().add_artist(L)
-
-    file_name = output_dir + '/' + 'mass_sculpting.png'
-    print('Saving mass sculpting     to:', file_name); plt.savefig(file_name)
 '''

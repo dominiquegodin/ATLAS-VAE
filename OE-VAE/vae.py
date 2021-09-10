@@ -15,7 +15,7 @@ from   plots     import plot_distributions, plot_results
 
 # PROGRAM ARGUMENTS
 parser = ArgumentParser()
-parser.add_argument( '--sample_type'   , default = 'Delphis'                           )
+parser.add_argument( '--sample_type'   , default = 'Delphes'                           )
 parser.add_argument( '--n_train'       , default = 1e6          , type = float         )
 parser.add_argument( '--n_valid'       , default = 1e6          , type = float         )
 parser.add_argument( '--n_test'        , default = 1e6          , type = float         )
@@ -26,6 +26,7 @@ parser.add_argument( '--n_dims'        , default = 4            , type = int    
 parser.add_argument( '--batch_size'    , default = 5e3          , type = float         )
 parser.add_argument( '--n_epochs'      , default = 500          , type = int           )
 parser.add_argument( '--FC_layers'     , default = [80,40,20,10], type = int, nargs='+')
+#parser.add_argument( '--FC_layers'     , default = [256,128,64,10], type = int, nargs='+')
 parser.add_argument( '--lr'            , default = 1e-3         , type = float         )
 parser.add_argument( '--beta'          , default = 0            , type = float         )
 parser.add_argument( '--lamb'          , default = 0            , type = float         )
@@ -100,8 +101,6 @@ if args.n_epochs > 0:
     sig_bins, bkg_bins = 100, 100
     train_sample = reweight_sample(train_sample, sig_bins, bkg_bins, weight_type=args.weight_type)
     plot_distributions(plot_samples, args.output_dir, sig_bins, bkg_bins, var='pt', log=True)
-    sys.exit()
-
     print('\nVALIDATION SAMPLE:')
     valid_sample = make_sample(args.sample_type, args.n_dims, args.n_constituents, 'qcd', 'W',
                                args.n_valid, args.n_W, bkg_cuts, sig_cuts, adjust_weights=False)

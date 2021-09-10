@@ -20,7 +20,7 @@ def make_sample(sample_type, n_dims, n_constituents, bkg_tag, sig_tag,
     data_path = '/opt/tmp/godin/AD_data'
     if sample_type == 'Atlas':
         data_files = {'qcd':'Atlas_MC_dijet.h5'  , 'W':'resamples_oe_w.h5', 'top':'Atlas_MC_ttbar.h5'}
-    if sample_type == 'Delphis':
+    if sample_type == 'Delphes':
         data_files = {'qcd':'qcd_preprocessed.h5', 'W':'resamples_oe_w.h5', 'top':'top_m174_02_preprocessed.h5'}
     bkg_file = data_path + '/' + data_files[bkg_tag]
     sig_file = data_path + '/' + data_files[sig_tag]
