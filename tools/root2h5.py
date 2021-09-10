@@ -16,13 +16,16 @@ args = parser.parse_args()
 
 # INPUT/OUTPUT PATHS
 input_path  = '/nvme1/atlas/godin/AD_data/rootfiles'
-if not os.path.isdir(input_path): input_path = '/lcg/storage18/atlas/pilette/atlasdata/rootfiles'
+if not os.path.isdir(input_path):
+    input_path = '/lcg/storage18/atlas/pilette/atlasdata/rootfiles'
 output_path = '/nvme1/atlas/godin/AD_data'
-dijet_label = 'Atlas_MC_dijet'
+dijet_label = 'Atlas_MC_dijet_test'
+ttbar_label = 'Atlas_MC_ttbar_test'
 
 
 # MERGING AND MIXING DATA FILES
-if args.merging == 'ON': file_processing(output_path+'/'+dijet_label)
+if args.merging == 'ON':
+    file_processing(output_path+'/'+dijet_label)
 
 
 # ROOT VARIABLES
@@ -34,6 +37,7 @@ jet_var = ['rljet_assoc_cluster_pt', 'rljet_assoc_cluster_eta', 'rljet_assoc_clu
 others  = ['weight_mc', 'weight_pileup', 'rljet_topTag_DNN19_qqb_score', 'rljet_topTag_TopoTagger_score'     ]
 others += ['rljet_n_constituents']
 
+
 # QCD AND TOP TAGS
 qcd_tags = ['361023', '361024', '361025', '361026', '361027',
             '361028', '361029', '361030', '361031', '361032']
@@ -43,10 +47,10 @@ top_tags = ['410284', '410285', '410286', '410287', '410288']
 # OUTPUT DATA FILES
 if 'ttbar' in args.tag or int(args.tag[0]) >= len(qcd_tags):
     JZW = -1; tag_list = top_tags
-    output_file = 'Atlas_MC_ttbar.h5'
+    output_file = ttbar_label + '.h5'
 else:
     JZW = int(args.tag[0]); tag_list = [qcd_tags[JZW]]
-    output_file = dijet_label+'_'+qcd_tags[JZW]+'.h5'
+    output_file = dijet_label + '_' + qcd_tags[JZW] + '.h5'
 
 
 # INPUT DATA PATHS
@@ -69,8 +73,10 @@ root_data['weights'] = args.luminosity*root_data.pop('weight_mc')*root_data.pop(
 
 
 # WRITING OUTPUT FILES
-if 'dijet' in output_file: output_path += '/'+dijet_label
-if not os.path.isdir(output_path): os.mkdir(output_path)
+if 'dijet' in output_file:
+    output_path += '/'+dijet_label
+if not os.path.isdir(output_path):
+    os.mkdir(output_path)
 data = h5py.File(output_path+'/'+output_file, 'w')
 for key in root_data:
     data.create_dataset(key, data=utils.shuffle(root_data[key],random_state=0), compression='lzf')

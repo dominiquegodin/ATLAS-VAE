@@ -8,76 +8,84 @@ from   scipy         import stats
 from   energyflow    import emd
 
 
-def make_datasets(train_sample, train_sample_OE, valid_sample, batch_size=1):
-    train_X       = (train_sample   ['constituents'], np.float32(train_sample   ['weights']))
-    train_X_OE    = (train_sample_OE['constituents'], np.float32(train_sample_OE['weights']))
-    train_dataset = tf.data.Dataset.from_tensor_slices( train_X + train_X_OE )
-    train_dataset = train_dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-    valid_X       = (valid_sample   ['constituents'], np.float32(valid_sample   ['weights']))
-    valid_dataset = tf.data.Dataset.from_tensor_slices( valid_X )
-    valid_dataset = valid_dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-    return train_dataset, valid_dataset
+def make_datasets(sample, sample_OE, batch_size=1):
+    X    = (sample   ['constituents'], sample   ['weights'])
+    X_OE = (sample_OE['constituents'], sample_OE['weights'])
+    dataset = tf.data.Dataset.from_tensor_slices( X + X_OE )
+    return dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
 
 
-def make_sample(n_dims, n_constituents, bkg, sig, bkg_idx, sig_idx, bkg_cuts='', sig_cuts=''):
-    data_path  = '/opt/tmp/godin/AD_data'
-    data_files = {'qcd':'Atlas_MC_dijet.h5', 'W':'resamples_oe_w.h5', 'top':'Atlas_MC_ttbar.h5'}
-    bkg_file   = data_path + '/' + data_files[bkg]
-    sig_file   = data_path + '/' + data_files[sig]
+def make_sample(sample_type, n_dims, n_constituents, bkg_tag, sig_tag,
+                bkg_idx, sig_idx, bkg_cuts, sig_cuts, adjust_weights):
+    data_path = '/opt/tmp/godin/AD_data'
+    if sample_type == 'Atlas':
+        data_files = {'qcd':'Atlas_MC_dijet.h5'  , 'W':'resamples_oe_w.h5', 'top':'Atlas_MC_ttbar.h5'}
+    if sample_type == 'Delphis':
+        data_files = {'qcd':'qcd_preprocessed.h5', 'W':'resamples_oe_w.h5', 'top':'top_m174_02_preprocessed.h5'}
+    bkg_file = data_path + '/' + data_files[bkg_tag]
+    sig_file = data_path + '/' + data_files[sig_tag]
     if np.isscalar(bkg_idx): bkg_idx = (0, bkg_idx)
     if np.isscalar(sig_idx): sig_idx = (0, sig_idx)
     if sig_idx[0] != sig_idx[1]:
-        sig_sample = load_data(sig_file, sig, sig_idx, n_constituents, cuts=sig_cuts)
+        sig_sample = load_data(sig_file, sig_tag, sig_idx, n_constituents, adjust_weights, cuts=sig_cuts)
     if bkg_idx[0] != bkg_idx[1]:
-        bkg_sample = load_data(bkg_file, bkg, bkg_idx, n_constituents, cuts=bkg_cuts)
+        bkg_sample = load_data(bkg_file, bkg_tag, bkg_idx, n_constituents, adjust_weights, cuts=bkg_cuts)
     if   'sig_sample' not in locals():
         sample = bkg_sample
     elif 'bkg_sample' not in locals():
         sample = sig_sample
     else:
-        if sig == 'W': sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
+        if sig_tag == 'W':
+            sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
         sample = {key:np.concatenate([sig_sample[key], bkg_sample[key]])
                   for key in set(sig_sample) & set(bkg_sample)}
-    # performing pt_scaling
     if 'constituents' in sample and False:
+        """ Scaling (E, px, py, px) with jet pt """
         sample['constituents'] = sample['constituents']/sample['pt'][:,np.newaxis]
     if 'constituents' in sample and n_dims == 3:
+        """ Using (px, py, px) instead of (E, px, py, px) """
         shape = sample['constituents'].shape
         sample['constituents'] = np.reshape(sample['constituents']        , (-1,shape[1]//4,4))
         sample['constituents'] = np.reshape(sample['constituents'][...,1:], (shape[0],-1)     )
     return sample
 
 
-def load_data(data_file, sample_type, idx, n_constituents, cuts):
-    print('Loading', format(sample_type,'^3s'), 'sample', end=' ', flush=True)
+def load_data(data_file, tag, idx, n_constituents, adjust_weights, cuts):
+    print('Loading', format(tag,'^3s'), 'sample', end=' ', flush=True)
     data     = h5py.File(data_file,"r"); start_time = time.time()
-    #data_var = set(['pt','M','weights','JZW']) & set(data)
-    sample   = {key:data[key][idx[0]:idx[1]] for key in data if key!='constituents'}
+    data_var = set(['pt','M','weights','JZW']) & set(data)
+    sample   = {key:np.float32(data[key][idx[0]:idx[1]]) for key in data_var if key!='constituents'}
     sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_constituents])
-    #if sample_type == 'W':
-    #print()
-    #print( sample_type, set(sample) & {'pt','M'}=={} )
-
     if len(set(sample) & {'pt','M'}) == 0:
         sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
-    if   'JZW'   not in sample: sample[  'JZW'  ] = np.full(len(sample['constituents']),-1)
-    if 'weights' not in sample: sample['weights'] = np.full(len(sample['constituents']), 1)
+    if 'JZW' not in sample:
+        sample['JZW'] = np.full(len(sample['constituents']), 0 if tag=='qcd' else -1, dtype=np.float32)
+    if 'weights' not in sample:
+        sample['weights'] = np.full(len(sample['constituents']), 1, dtype=np.float32)
     cut_list = [np.full_like(sample['weights'], True)]
     for cut in cuts:
         try: cut_list.append(eval(cut))
         except KeyError: pass
     cuts = np.logical_and.reduce(cut_list)
-    sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
+    if adjust_weights:
+        sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
     if not np.all(cuts):
         sample = {key:sample[key][cuts] for key in sample}
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
 
 
+def separate_sample(sample):
+    JZW        = sample['JZW']
+    bkg_sample = {key:val[JZW!=-1] for key,val in sample.items()}
+    sig_sample = {key:val[JZW==-1] for key,val in sample.items()}
+    return bkg_sample, sig_sample
+
+
 def upsampling(sample, target_size):
     source_size = len(list(sample.values())[0])
     indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
-    sample['weights'] = sample['weights']*source_size/target_size
+    sample['weights'] = sample['weights']*np.float32(source_size/target_size)
     return {key:np.take(sample[key], indices, axis=0) for key in sample}
 
 
@@ -86,10 +94,10 @@ def reweight_sample(sample, sig_bins, bkg_bins, weight_type='X-S'):
     if weight_type == None or weight_type == 'none':
         if np.any(sig):
             sig_weights = sample['weights'][sig]
-            sample['weights'][sig] = np.full(len(sig_weights), np.sum(sig_weights)/len(sig_weights))
+            sample['weights'][sig] = np.full(len(sig_weights), np.sum(sig_weights)/len(sig_weights), dtype=np.float32)
         if np.any(bkg):
             bkg_weights = sample['weights'][bkg]
-            sample['weights'][bkg] = np.full(len(bkg_weights), np.sum(bkg_weights)/len(bkg_weights))
+            sample['weights'][bkg] = np.full(len(bkg_weights), np.sum(bkg_weights)/len(bkg_weights), dtype=np.float32)
     if weight_type == 'flat_pt':
         if np.any(sig):
             sample['weights'][sig] = pt_weighting(sample['pt'][sig], sample['weights'][sig], sig_bins)
@@ -99,7 +107,6 @@ def reweight_sample(sample, sig_bins, bkg_bins, weight_type='X-S'):
 
 
 def pt_weighting(pt, xs_weights, n_bins, density=True):
-    pt        = np.float32(pt)
     bin_width = (np.max(pt) - np.min(pt)) / n_bins
     pt_bins   = [np.min(pt) + k*bin_width for k in np.arange(n_bins+1)]
     pt_idx    = np.minimum(np.digitize(pt, pt_bins, right=False), len(pt_bins)-1) -1
@@ -114,7 +121,7 @@ def weights_factors(JZW, data_file):
     else:
         n_JZW = [  35596, 13406964, 15909276, 17831457, 15981239,
                 15997303, 13913843, 13983297, 15946135, 15993849]
-        factors = np.ones_like(JZW)
+        factors = np.ones_like(JZW, dtype=np.float32)
         for n in np.arange(len(n_JZW)):
             if np.sum(JZW==n) != 0: factors[JZW==n] = n_JZW[n]/np.sum(JZW==n)
     return factors
@@ -144,7 +151,7 @@ def JSD(P, Q, idx, n_dims, return_dict, reshape=False):
     else: return_dict[idx] = [distance.jensenshannon(P[n,:], Q[n,:]) for n in np.arange(idx[0],idx[1])]
 
 
-def KST(P, Q, idx, n_dims, return_dict, reshape=False):
+def KSD(P, Q, idx, n_dims, return_dict, reshape=False):
     if reshape:
         P, Q = np.reshape(P, (-1,int(P.shape[1]/n_dims),n_dims)), np.reshape(Q, (-1,int(Q.shape[1]/n_dims),n_dims))
         return_dict[idx] = [np.mean([stats.ks_2samp(P[n,:,m], Q[n,:,m])[0] for m in np.arange(n_dims)])
@@ -178,7 +185,7 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
     if metric in ['DNN', 'FCN']: loss = P
     if metric in ['JSD', 'KSD', 'EMD']:
         idx_tuples = get_idx(len(P), n_sets=mp.cpu_count()//3)
-        target     = JSD if metric=='JSD' else KST if metric=='KSD' else EMD
+        target     = JSD if metric=='JSD' else KSD if metric=='KSD' else EMD
         manager    = mp.Manager(); return_dict = manager.dict()
         processes  = [mp.Process(target=target, args=(P, Q, idx, n_dims, return_dict)) for idx in idx_tuples]
         for task in processes: task.start()
@@ -192,7 +199,7 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
     else: return loss
 
 
-def fit_scaler(sample, n_dims, scaler_out, reshape=True, scaler_type='MaxAbsScaler'):
+def fit_scaler(sample, n_dims, scaler_out, reshape=False, scaler_type='RobustScaler'):
     print('\nFitting', scaler_type, 'scaler', end=' ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     if scaler_type == 'QuantileTransformer':
@@ -203,10 +210,10 @@ def fit_scaler(sample, n_dims, scaler_out, reshape=True, scaler_type='MaxAbsScal
         scaler = preprocessing.RobustScaler()
     scaler.fit(sample)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    print('Saving scaling to', scaler_out)
+    print('Saving scaler to', scaler_out)
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
-def apply_scaler(sample, n_dims, scaler, idx=(0,None), return_dict=None, reshape=True):
+def apply_scaling(sample, n_dims, scaler, reshape, idx=(0,None), return_dict=None):
     if idx == (0,None):
         print('Applying scaler', end=' ', flush=True); start_time = time.time()
     shape = sample.shape
@@ -217,12 +224,12 @@ def apply_scaler(sample, n_dims, scaler, idx=(0,None), return_dict=None, reshape
         print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
         return sample
     else: return_dict[idx] = sample
-def scaling(sample, n_dims, scaler, reshape=True):
+def apply_scaler(sample, n_dims, scaler, reshape=False):
     print('Applying scaler', end=' ', flush=True); start_time = time.time()
     idx_tuples = get_idx(len(sample), start_val=0, n_sets=mp.cpu_count())
     manager    = mp.Manager(); return_dict = manager.dict()
-    arguments  = [(sample[idx[0]:idx[1]], n_dims, scaler, idx, return_dict, reshape) for idx in idx_tuples]
-    processes  = [mp.Process(target=apply_scaler, args=arg) for arg in arguments]
+    arguments  = [(sample[idx[0]:idx[1]], n_dims, scaler, reshape, idx, return_dict) for idx in idx_tuples]
+    processes  = [mp.Process(target=apply_scaling, args=arg) for arg in arguments]
     for task in processes: task.start()
     for task in processes: task.join()
     sample = np.concatenate([return_dict[idx] for idx in idx_tuples])
@@ -239,10 +246,6 @@ def inverse_scaler(sample, n_dims, scaler, reshape=True):
 
 
 def best_threshold(y_true, X_loss, X_mass, weights, cut_type='gain'):
-    #cuts = '(X_mass >= 150) & (X_mass <= 190)'
-    #    y_true  = y_true [eval(cuts)]
-    #    X_loss  = X_loss [eval(cuts)]
-    #    weights = weights[eval(cuts)]
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
     len_0      = np.sum(fpr==0)
     thresholds = thresholds[len_0:][tpr[len_0:]>0.01]
@@ -256,25 +259,30 @@ def best_threshold(y_true, X_loss, X_mass, weights, cut_type='gain'):
     return thresholds[cut_index], cut_values[cut_index]
 
 
-def apply_best_cut(y_true, X_true, X_pred, sample, n_dims, metric, cut_type='gain'):
+def apply_best_cut(y_true, X_true, X_pred, sample, n_dims, model, metric, cut_type='gain'):
     if metric == 'DNN': X_true = sample['DNN']
     if metric == 'FCN': X_true = sample['FCN']
-    X_loss   = loss_function(X_true, X_pred, n_dims, metric, multiloss=False)
+    if metric == 'Latent':
+        model(X_true)
+        X_loss = model.losses[0].numpy()
+    else:
+        X_loss = loss_function(X_true, X_pred, n_dims, metric, multiloss=False)
     loss_cut, loss_val = best_threshold(y_true, X_loss, sample['M'], sample['weights'], cut_type)
     print('Best', metric, 'cut:', metric, '>=', format(loss_cut, '.3f'), end= ' ; ')
-    print(cut_type, '=', format(loss_val, '.2f'), '\n')
+    print(cut_type, '=', format(loss_val, '.2f'))
     sample = {key:sample[key][X_loss > loss_cut] for key in sample}
     return sample
 
 
 def bump_hunter(y_true, sample, output_dir, m_range=[120,200]):
     import pyBumpHunter as BH #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
+    print()
     data, data_weights   = sample['M']    , sample['weights']
     bkg , bkg_weights    = data[y_true==1], data_weights[y_true==1]
     data_hist, bin_edges = np.histogram(data, bins=50, range=m_range, weights=data_weights)
     bkg_hist , bin_edges = np.histogram(bkg , bins=50, range=m_range, weights= bkg_weights)
     start_time = time.time()
-    #BumpHunter1D class instance
+    """ BumpHunter1D class instance """
     hunter = BH.BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
                              npe=10000, nworker=1, seed=0, bins=bin_edges)
     hunter.bump_scan(data_hist, bkg_hist, is_hist=True)
