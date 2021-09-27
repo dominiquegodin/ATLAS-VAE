@@ -8,24 +8,23 @@ from scipy.spatial import distance
 from utils         import loss_function, inverse_scaler, get_4v
 
 
-def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, output_dir):
+def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metric, output_dir):
     print('PLOTTING RESULTS:')
     manager = mp.Manager(); X_losses = manager.dict()
     X_true_dict = {metric:X_true for metric in metrics if metric!='Latent'}
     if False:
         X_true_dict['Inputs'] = sample['constituents']
-    arguments   = [(X_true_dict[metric], X_pred, n_dims, metric, X_losses) for metric in metrics if metric!='Latent']
-    processes   = [mp.Process(target=loss_function, args=arg) for arg in arguments]
+    arguments = [(X_true_dict[metric], X_pred, n_dims, metric, X_losses) for metric in metrics if metric!='Latent']
+    processes = [mp.Process(target=loss_function, args=arg) for arg in arguments]
     for job in processes: job.start()
     for job in processes: job.join()
-    """ Adding latent space KLD metric """
-    if 'Latent' in metrics:
+    if 'Latent' in metrics: #Adding latent space KLD metric and loss
         model(X_true)
         X_losses['Latent'] = model.losses[0].numpy()
-    arguments  = [(y_true, X_losses, sample['M'], sample['weights'], metrics, output_dir)]
+    arguments  = [(y_true, X_losses, sample['M'], sample['weights'], metrics, wp_metric, output_dir)]
     processes  = [mp.Process(target=mass_sculpting, args=arg) for arg in arguments]
     processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'gain' ))]
-    processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'sigma'))]
+    #processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'sigma'))]
     #arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
     #processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
@@ -85,8 +84,8 @@ def mass_distances(y_true, X_losses, X_mass, weights, metric, distances_dict, n_
     distances_dict[metric] = KSD, JSD, sig_eff, bkg_eff
 
 
-def mass_sculpting(y_true, X_losses, X_mass, weights, metrics_list, output_dir, wp_metric='MSE'):
-    def make_plot(distance_type, wp_metric='Latent'):
+def mass_sculpting(y_true, X_losses, X_mass, weights, metrics_list, wp_metric, output_dir):
+    def make_plot(distance_type, wp_metric):
         for metric in metrics_list:
             label = str(metric)+(' metric' if len(metrics_list)==1 else '')
             if distance_type == 'KSD': dist, _, sig_eff, bkg_eff = distances_dict[metric]
@@ -123,14 +122,37 @@ def mass_sculpting(y_true, X_losses, X_mass, weights, metrics_list, output_dir, 
     print('Saving mass sculpting     to:', file_name); plt.savefig(file_name)
 
 
-def plot_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=False, density=True, log=True):
-    if var == 'pt':
-        labels = {0:[r'$W$','QCD','All'], 1:[r'$W$ (weighted)','QCD (weighted)','All (cut)']}
-    if var == 'M':
-        labels = {0:[r'$t\bar{t}$','QCD','All'], 1:[r'$t\bar{t}$ (cut)','QCD (cut)','All (cut)']}
+def signal_gain(sample, cut_sample, output_dir, n_bins=50, m_range=(0,200)):
+    def get_histo(sample):
+        M       = sample['M']
+        weights = sample['weights']
+        JZW     = sample['JZW']
+        sig_histo, mass = np.histogram(M[JZW==-1], bins=n_bins, range=m_range, weights=weights[JZW==-1])
+        bkg_histo, mass = np.histogram(M[JZW>= 0], bins=n_bins, range=m_range, weights=weights[JZW>= 0])
+        return mass, sig_histo, bkg_histo
+    mass, sig_histo    , bkg_histo     = get_histo(sample)
+    mass, sig_cut_histo, bkg_cut_histo = get_histo(cut_sample)
+    mass = (mass[:-1] + mass[1:])/2
+    gain = bkg_histo*sig_cut_histo / (bkg_cut_histo*sig_histo)
+    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    plt.plot(mass, gain, label='gain', color='tab:blue', lw=2)
+    file_name = output_dir + '/' + 'signal_gain.png'
+    print('Saving signal gain to:', file_name); plt.savefig(file_name)
+
+
+def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_tag,
+                       normalize=False, density=True, log=True, file_name=''):
+    if sig_tag == 'qcd': sig_tag = r'$W$'
+    if sig_tag == 'top': sig_tag = r'$t\bar{t}$'
+    if plot_var == 'pt':
+        #labels = {0:[sig_tag,'QCD','All'], 1:[sig_tag+'$ (weighted)','QCD (weighted)','All (cut)']}
+        labels = {0:[sig_tag+' (X-S weighted)'       ,'QCD (X-S weighted)'       ,'All'],
+                  1:[sig_tag+' (flat $p_t$ weighted)','QCD (flat $p_t$ weighted)','All (cut)']}
+    if plot_var == 'M':
+        labels = {0:[sig_tag,'QCD','All'], 1:[sig_tag+' (cut)','QCD (cut)','All (cut)']}
     colors = ['tab:orange', 'tab:blue', 'tab:brown']; alphas = [1, 0.5]
     n_bins = [sig_bins, bkg_bins, bkg_bins]
-    xlabel = {'pt':'$p_t$', 'M':'$M$'}[var]
+    xlabel = {'pt':'$p_t$', 'M':'$M$'}[plot_var]
     plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
     if not isinstance(samples, list):
         samples = [samples]
@@ -138,10 +160,13 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=F
         for m in range(len(samples)):
             sample = samples[m]
             condition = sample['JZW']==-1 if n==0 else sample['JZW']>= 0 if n==1 else sample['JZW']>=-2
-            if not np.any(condition): continue
-            variable  = np.float32(sample[var][condition]); weights = sample['weights'][condition]
+            if not np.any(condition):
+                continue
+            variable = np.float32(sample[plot_var][condition])
+            weights = sample['weights'][condition]
             min_val, max_val = np.min(variable), np.max(variable)
-            if var == 'M': min_val, max_val = 0, 400
+            if plot_var == 'M':
+                min_val, max_val = 0, 400 #571.3449
             bin_width = (max_val - min_val) / n_bins[n]
             bins      = [min_val + k*bin_width for k in np.arange(n_bins[n]+1)]
             if normalize:
@@ -161,20 +186,26 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, var, normalize=F
             #pylab.xlim(0, 6000); pylab.ylim(0, 0.05)
             #pylab.yticks(np.arange(0,0.06,0.01))
     else:
-        #pylab.xlim(0, 6000); pylab.ylim(1e0, 1e6)
-        pylab.xlim(0, 2000); pylab.ylim(1e0, 1e4)
-    if var == 'M':
-        pylab.xlim(0, 400); pylab.ylim(1e-1, 1e3)
+        #pylab.xlim(0, 2000); pylab.ylim(1e-5, 1e4)
+        pylab.xlim(0, 6000); pylab.ylim(1e0, 1e7)
+    if plot_var == 'M':
+        pylab.xlim(0, 400); pylab.ylim(1e-1, 1e7)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if not log: axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.tick_params(axis='both', which='major', labelsize=14)
     axes.tick_params(axis='both', which='major', labelsize=14)
     plt.xlabel(xlabel+' (GeV)', fontsize=24)
-    y_label = (' density' if density else '') #+ ' ('+('%' if normalize else r'36 fb$^{-1}$') + ')'
+    y_label = (' density' if density else '')
+    if normalize:
+        y_label += ' (%)'
+    elif sig_tag == 'top':
+        y_label += ' ('+r'36 fb$^{-1}$'+')'
     plt.ylabel('Distribution' + y_label, fontsize=24)
     plt.legend(loc='upper right', ncol=1 if len(samples)==1 else 2, fontsize=18)
-    file_name = output_dir+'/'+(var if var=='pt' else 'mass')+'_dist.png'
-    print('Saving', var, 'distributions to:', file_name); plt.savefig(file_name)
+    if file_name == '':
+        file_name = (plot_var if plot_var=='pt' else 'mass')+'_dist.png'
+    file_name = output_dir+'/'+file_name
+    print('Saving', plot_var, 'distributions to:', file_name); plt.savefig(file_name)
 
 
 def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
@@ -252,11 +283,15 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, ROC_type='ga
         if ROC_type == 'sigma':
             n_sig = np.sum(weights[y_true==0])
             n_bkg = np.sum(weights[y_true==1])
-            ROC_var  = n_sig*tpr[len_0:]/np.sqrt(n_bkg*fpr[len_0:])
+            ROC_var = n_sig*tpr[len_0:]/np.sqrt(n_bkg*fpr[len_0:])
         max_ROC_var = max(max_ROC_var, np.max(ROC_var[100*tpr[len_0:]>=1]))
         plt.plot(100*tpr[len_0:], ROC_var, label=metric, lw=2, color=colors_dict[metric])
+    if ROC_type == 'sigma':
+        val = ROC_var[-1]
+        axes.axhline(val, xmin=0, xmax=1, ls='--', linewidth=1., color='gray')
+        plt.text(100.4, val, format(val,'.2f'), {'color':'gray', 'fontsize':12}, va="center", ha="left")
     pylab.xlim(1,100)
-    pylab.ylim(1,np.ceil(max_ROC_var))
+    pylab.ylim(0,np.ceil(max_ROC_var))
     plt.xscale('log')
     plt.xticks([1,10,100], ['1','10', '100'])
     axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
@@ -302,28 +337,3 @@ def KS_distance(dist_1, dist_2, weights_1=None, weights_2=None):
     cdf_1     = weights_1[tuple([np.searchsorted(dist_1, dist_all, side='right')])]
     cdf_2     = weights_2[tuple([np.searchsorted(dist_2, dist_all, side='right')])]
     return np.max(np.abs(cdf_1 - cdf_2))
-
-'''
-def JS_distance(p, q, base=None, *, axis=0, keepdims=False):
-    def xlogy(x, y):
-        with np.errstate(invalid='ignore'):
-            if x == 0 and not np.isnan(y): return x
-            else                         : return x*np.log(y)
-    def rel_entr(x, y):
-        if x > 0 and y > 0    : return xlogy(x, x/y)
-        elif x == 0 and y >= 0: return 0
-        else                  : return np.inf
-    p = np.asarray(p)
-    q = np.asarray(q)
-    p = p / np.sum(p, axis=axis, keepdims=True)
-    q = q / np.sum(q, axis=axis, keepdims=True)
-    m = (p + q) / 2.0
-    left = rel_entr(p, m)
-    right = rel_entr(q, m)
-    left_sum = np.sum(left, axis=axis, keepdims=keepdims)
-    right_sum = np.sum(right, axis=axis, keepdims=keepdims)
-    js = left_sum + right_sum
-    if base is not None:
-        js /= np.log(base)
-    return np.sqrt(js/2.0)
-'''

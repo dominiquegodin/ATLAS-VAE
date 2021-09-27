@@ -10,11 +10,15 @@ class Encoder(layers.Layer):
         super(Encoder, self).__init__(name=name, **kwargs)
         self.FC_layers = FC_layers[:-1]; self.seed = seed
         self.denses = [layers.Dense(n_neurons, activation="relu") for n_neurons in self.FC_layers]
+        #self.denses = [layers.Dense(n_neurons, kernel_initializer='he_normal') for n_neurons in self.FC_layers]
         self.dense_mean    = layers.Dense(FC_layers[-1])
         self.dense_log_var = layers.Dense(FC_layers[-1])
         self.sampling = Sampling()
     def call(self, x):
-        for dense in self.denses: x = dense(x)
+        for dense in self.denses:
+            #x = layers.BatchNormalization()(x)
+            x = dense(x)
+            #x = layers.Activation('relu')(x)
         z_mean    = self.dense_mean(x)
         z_log_var = self.dense_log_var(x)
         z         = self.sampling([z_mean, z_log_var], seed=self.seed)
@@ -27,9 +31,13 @@ class Decoder(layers.Layer):
         super(Decoder, self).__init__(name=name, **kwargs)
         self.FC_layers = FC_layers[:-1][::-1]
         self.denses = [layers.Dense(n_neurons, activation="relu") for n_neurons in self.FC_layers]
+        #self.denses = [layers.Dense(n_neurons, kernel_initializer='he_normal') for n_neurons in self.FC_layers]
         self.dense_output = layers.Dense(output_dim, activation='linear')
     def call(self, x):
-        for dense in self.denses: x = dense(x)
+        for dense in self.denses:
+            #x = layers.BatchNormalization()(x)
+            x = dense(x)
+            #x = layers.Activation('relu')(x)
         return self.dense_output(x)
 
 
@@ -62,7 +70,7 @@ def KLD_loss(z_mean, z_log_var):
 
 def OE_loss(vae, batch_X, batch_X_OE, OE_type, margin=1):
     """ Calculating outlier jets KLD-OE loss """
-    if OE_type == 1:
+    if OE_type == 'KLD':
         z_mean   , z_log_var   , _ = vae.encoder(batch_X)
         z_mean_OE, z_log_var_OE, _ = vae.encoder(batch_X_OE)
         loss = KLD_loss(z_mean, z_log_var) - KLD_loss(z_mean_OE, z_log_var_OE) + margin
@@ -72,13 +80,13 @@ def OE_loss(vae, batch_X, batch_X_OE, OE_type, margin=1):
     reconstructed_OE = vae(batch_X_OE)
     loss_MSE    = tf.keras.losses.MSE(batch_X   , reconstructed)
     loss_MSE_OE = tf.keras.losses.MSE(batch_X_OE, reconstructed_OE)
-    if OE_type == 2:
-        return tf.keras.activations.sigmoid(loss_MSE - loss_MSE_OE) + 1
-    if OE_type == 3:
+    if OE_type == 'MSE':
+        return tf.keras.activations.sigmoid(loss_MSE - loss_MSE_OE) #+ 1
+    if OE_type == 'MSE-margin':
         return tf.keras.activations.relu(loss_MSE - loss_MSE_OE + margin)
 
 
-def get_losses(vae, data, beta, lamb, OE_type=2):
+def get_losses(vae, data, OE_type, beta, lamb):
     batch_X, weights, batch_X_OE, weights_OE = data
     reconstructed = vae(batch_X)
     """ MSE reconstruction loss """
@@ -93,9 +101,15 @@ def get_losses(vae, data, beta, lamb, OE_type=2):
     return loss_MSE, loss_KLD, loss_OE, loss_MSE + loss_KLD + loss_OE
 
 
-def build_model(vae, train_dataset, valid_dataset, n_epochs=1, beta=0, lamb=0, lr=1e-3):
+def build_model(vae, train_dataset, valid_dataset, OE_type='KLD', n_epochs=1, beta=0, lamb=0, lr=1e-3):
     """ Using subclassing Tensoflow API to build model """
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
+    #optimizer = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.0, nesterov=False)
+    #optimizer = tf.keras.optimizers.Adadelta(learning_rate=lr, rho=0.95, epsilon=1e-07)
+    #optimizer = tf.keras.optimizers.Adagrad (learning_rate=lr, initial_accumulator_value=0.1)
+    #optimizer = tf.keras.optimizers.Adamax(learning_rate=lr, beta_1=0.9, beta_2=0.999)
+    #optimizer = tf.keras.optimizers.Nadam(learning_rate=lr, beta_1=0.9, beta_2=0.999)
+    #optimizer = tf.keras.optimizers.RMSprop(learning_rate=1r, rho=0.9, momentum=0.0, centered=False)
     train_len = tf.data.experimental.cardinality(train_dataset).numpy()
     valid_len = tf.data.experimental.cardinality(valid_dataset).numpy()
     metric_MSE   = tf.keras.metrics.Mean()
@@ -117,7 +131,7 @@ def build_model(vae, train_dataset, valid_dataset, n_epochs=1, beta=0, lamb=0, l
         """ ITERATING OVER BATCHES """
         for batch_idx, train_data in enumerate(train_dataset):
             with tf.GradientTape() as tape:
-                loss_MSE, loss_KLD, loss_OE, loss_train = get_losses(vae, train_data, beta, lamb)
+                loss_MSE, loss_KLD, loss_OE, loss_train = get_losses(vae, train_data, OE_type, beta, lamb)
             grads = tape.gradient(loss_train, vae.trainable_weights)
             optimizer.apply_gradients( zip(grads, vae.trainable_weights) )
             metric_MSE  (loss_MSE  )
@@ -135,7 +149,7 @@ def build_model(vae, train_dataset, valid_dataset, n_epochs=1, beta=0, lamb=0, l
                     flush = False if key=='Train loss' and batch_idx+1!=train_len else True
                     print(key + ' = ' + format(val,'4.3e'), end=end, flush=True)
         for valid_data in valid_dataset:
-            loss_MSE, loss_KLD, loss_OE, loss_valid = get_losses(vae, valid_data, beta, lamb=0)
+            loss_MSE, loss_KLD, loss_OE, loss_valid = get_losses(vae, valid_data, OE_type, beta, lamb=0)
         metric_valid(loss_valid)
         print('Valid loss = ' + format(metric_valid.result(),'4.3e'), end='  ', flush=True)
         print('(', '\b' + format(time.time() - start_time, '.1f'), '\b' + 's)')

@@ -19,8 +19,8 @@ input_path  = '/nvme1/atlas/godin/AD_data/rootfiles'
 if not os.path.isdir(input_path):
     input_path = '/lcg/storage18/atlas/pilette/atlasdata/rootfiles'
 output_path = '/nvme1/atlas/godin/AD_data'
-dijet_label = 'Atlas_MC_dijet_test'
-ttbar_label = 'Atlas_MC_ttbar_test'
+dijet_label = 'Atlas_MC_dijet'
+ttbar_label = 'Atlas_MC_ttbar'
 
 
 # MERGING AND MIXING DATA FILES
@@ -34,8 +34,7 @@ scalars = ['rljet_m_comb'    , 'rljet_pt_calo'   , 'rljet_ECF3'      , 'rljet_C2
            'rljet_PlanarFlow', 'rljet_Angularity', 'rljet_Aplanarity', 'rljet_ZCut12'   , 'rljet_Split12'    ,
            'rljet_Split23'   , 'rljet_KtDR'      , 'rljet_Qw'        , 'rljet_eta'      , 'rljet_phi'        ]
 jet_var = ['rljet_assoc_cluster_pt', 'rljet_assoc_cluster_eta', 'rljet_assoc_cluster_phi'                    ]
-others  = ['weight_mc', 'weight_pileup', 'rljet_topTag_DNN19_qqb_score', 'rljet_topTag_TopoTagger_score'     ]
-others += ['rljet_n_constituents']
+others  = ['weight_mc', 'weight_pileup', 'rljet_topTag_DNN19_qqb_score', 'rljet_n_constituents'              ]
 
 
 # QCD AND TOP TAGS
@@ -46,11 +45,13 @@ top_tags = ['410284', '410285', '410286', '410287', '410288']
 
 # OUTPUT DATA FILES
 if 'ttbar' in args.tag or int(args.tag[0]) >= len(qcd_tags):
-    JZW = -1; tag_list = top_tags
-    output_file = ttbar_label + '.h5'
+    JZW = -1
+    tag_list = top_tags
+    output_file = ttbar_label+'.h5'
 else:
-    JZW = int(args.tag[0]); tag_list = [qcd_tags[JZW]]
-    output_file = dijet_label + '_' + qcd_tags[JZW] + '.h5'
+    JZW = int(args.tag[0])
+    tag_list = [qcd_tags[JZW]]
+    output_file = dijet_label+'_'+qcd_tags[JZW]+'.h5'
 
 
 # INPUT DATA PATHS

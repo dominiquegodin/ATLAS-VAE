@@ -35,17 +35,19 @@ def mix_samples(data_path, data_files, idx_list, file_idx, out_idx):
             if key == 'constituents':
                 sample = np.zeros((idx[1]-idx[0],400))
                 sample[:,0:data.shape[1]] = data[idx[0]:idx[1]]
-                sample_list += [np.float16(sample)]; del sample
+                sample_list += [np.float16(sample)]
+                del sample
             else:
                 sample_list += [data[idx[0]:idx[1]]]
         sample = np.concatenate(sample_list)
         file_name = 'merging'+'/'+data_path.split('/')[-1]+'_'+'{:=02}'.format(file_idx.index(out_idx))+'.h5'
         attribute = 'w' if keys.index(key)==0 else 'a'
-        data   = h5py.File(data_path+'/'+file_name, attribute, rdcc_nbytes=20*1024**3, rdcc_nslots=10000019)
-        shape  = (len(sample),) + sample.shape[1:]
-        maxshape = (None,)+sample.shape[1:]
-        dtype = type_dict[key] if key in type_dict else np.float32
-        chunks = (10000,)+sample.shape[1:]
+        dtype     = type_dict[key] if key in type_dict else data.dtype
+        shape     = (len(sample),) + sample.shape[1:]
+        maxshape  = (None,) + sample.shape[1:]
+        #dtype     = type_dict[key] if key in type_dict else np.float32
+        chunks    = (10000,)+sample.shape[1:]
+        data      = h5py.File(data_path+'/'+file_name, attribute, rdcc_nbytes=20*1024**3, rdcc_nslots=10000019)
         data.create_dataset(key, shape, maxshape=maxshape, dtype=dtype, compression='lzf', chunks=chunks)
         data[key][:] = utils.shuffle(sample, random_state=0)
 
