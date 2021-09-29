@@ -8,25 +8,26 @@ except ModuleNotFoundError: pass
 
 
 def get_files(main_path, paths):
-    return {path.split('.')[2]: sorted([main_path+'/'+path+'/'+root_file+':nominal' for
-            root_file in os.listdir(main_path+'/'+path)]) for path in paths}
+    return {path.split('.')[2]: sorted([main_path+'/'+path+'/'+root_file+':nominal'
+            for root_file in os.listdir(main_path+'/'+path)]) for path in paths}
 
 
-def get_data(root_list, var_list, jet_var, n_jets=100):
+def get_data(root_list, var_list, jet_var, n_constituents):
     start_time = time.time()
     with mp.Pool() as pool:
         root_tuples = list(itertools.product(root_list, var_list))
-        arrays_list = pool.map(partial(root_conversion, jet_var, n_jets), root_tuples)
+        arrays_list = pool.map(partial(root_conversion, jet_var, n_constituents), root_tuples)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return {key:np.concatenate([n[1] for n in arrays_list if key in n[0]]) for key in var_list}
 
 
-def root_conversion(jet_var, n_jets, root_tuple):
+def root_conversion(jet_var, n_constituents, root_tuple):
     root_file, key = root_tuple
     tag = root_file.split('.')[2]
     arrays = uproot.open(root_file)[key].array(library='ak')
     if key in jet_var:
-        arrays = [np.pad(ak.to_numpy(n[0]), (0,max(n_jets-len(n[0]),0)),'constant')[:n_jets] for n in arrays]
+        arrays = [np.pad(ak.to_numpy(n[0]), (0,max(n_constituents-len(n[0]),0)),'constant')[:n_constituents]
+                  for n in arrays]
         arrays = np.float16(np.vstack(arrays)/1000. if key=='rljet_assoc_cluster_pt' else np.vstack(arrays))
         print(format(key,'23s'), 'converted from', '...'+tag+'...'+root_file.split('._')[-1])
     else:

@@ -45,10 +45,12 @@ top_tags = ['410284', '410285', '410286', '410287', '410288']
 
 # OUTPUT DATA FILES
 if 'ttbar' in args.tag or int(args.tag[0]) >= len(qcd_tags):
+    n_constituents = 120
     JZW = -1
     tag_list = top_tags
     output_file = ttbar_label+'.h5'
 else:
+    n_constituents = 100
     JZW = int(args.tag[0])
     tag_list = [qcd_tags[JZW]]
     output_file = dijet_label+'_'+qcd_tags[JZW]+'.h5'
@@ -66,7 +68,7 @@ root_list  = np.concatenate([files_dict[tag] for tag in tag_list])
 
 # READING AND PROCESSING ROOT DATA
 var_list  = scalars + jet_var + others
-root_data = get_data(root_list, var_list, jet_var)
+root_data = get_data(root_list, var_list, jet_var, n_constituents)
 if np.all([n in var_list for n in jet_var]):
     root_data.update(final_jets({key:root_data.pop(key) for key in jet_var}))
 root_data['weights'] = args.luminosity*root_data.pop('weight_mc')*root_data.pop('weight_pileup')
