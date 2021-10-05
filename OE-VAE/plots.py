@@ -22,7 +22,7 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     if 'Latent' in metrics: #Adding latent space KLD metric and loss
         model(X_true)
         X_losses['Latent'] = model.losses[0].numpy()
-    max_significance(y_true, X_losses[wp_metric], sample, output_dir); sys.exit()
+    #max_significance(y_true, X_losses[wp_metric], sample, output_dir); sys.exit()
     arguments  = [(y_true, X_losses, sample['M'], sample['weights'], metrics, wp_metric, output_dir)]
     processes  = [mp.Process(target=mass_sculpting, args=arg) for arg in arguments]
     processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'gain' ))]
@@ -34,7 +34,7 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     for job in processes: job.join()
 
 
-def max_significance(y_true, X_loss, sample, output_dir, n_cuts=200):
+def max_significance(y_true, X_loss, sample, output_dir, n_cuts=20):
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=sample['weights'])
     step = max(1,len(fpr)//n_cuts)
     fpr, tpr, losses = fpr[::step], tpr[::step], thresholds[::step]

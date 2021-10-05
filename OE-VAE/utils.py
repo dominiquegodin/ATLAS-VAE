@@ -308,8 +308,9 @@ def apply_best_cut(y_true, X_true, X_pred, sample, n_dims, model, metric, cut_ty
 
 def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[120,200], bins=50, make_histo=True):
     #import pyBumpHunter as BH
-    sys.path.append('../')
-    from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
+    #sys.path.append('../')
+    #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
+    from BumpHunter.bumphunter_1dim import BumpHunter1D
     y_true = np.where(sample['JZW']==-1, 0, 1)
     data, data_weights = sample['M']    , sample['weights']
     bkg , bkg_weights  = data[y_true==1], data_weights[y_true==1]
