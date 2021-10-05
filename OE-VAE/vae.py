@@ -15,7 +15,7 @@ from   plots     import plot_distributions, plot_results
 
 # PROGRAM ARGUMENTS
 parser = ArgumentParser()
-parser.add_argument( '--sample_type'   , default = 'Delphes'                           )
+parser.add_argument( '--sample_type'   , default = 'Atlas_UFO'                         )
 parser.add_argument( '--n_train'       , default = 1e6          , type = float         )
 parser.add_argument( '--n_valid'       , default = 1e6          , type = float         )
 parser.add_argument( '--n_test'        , default = 1e6          , type = float         )
@@ -24,13 +24,13 @@ parser.add_argument( '--n_top'         , default = 1e6          , type = float  
 parser.add_argument( '--n_constituents', default = 20           , type = int           )
 parser.add_argument( '--n_dims'        , default = 4            , type = int           )
 parser.add_argument( '--batch_size'    , default = 5e3          , type = float         )
-parser.add_argument( '--n_epochs'      , default = 500          , type = int           )
+parser.add_argument( '--n_epochs'      , default = 50           , type = int           )
 parser.add_argument( '--FC_layers'     , default = [80,40,20,10], type = int, nargs='+')
-#parser.add_argument( '--FC_layers'     , default = [256,128,64,10], type = int, nargs='+')
 parser.add_argument( '--lr'            , default = 1e-3         , type = float         )
 parser.add_argument( '--beta'          , default = 0            , type = float         )
 parser.add_argument( '--lamb'          , default = 0            , type = float         )
 parser.add_argument( '--n_iter'        , default = 1            , type = int           )
+parser.add_argument( '--OE_type'       , default = 'KLD'                               )
 parser.add_argument( '--weight_type'   , default = 'flat_pt'                           )
 parser.add_argument( '--plotting'      , default = 'OFF'                               )
 parser.add_argument( '--apply_cut'     , default = 'OFF'                               )
@@ -52,9 +52,9 @@ metrics = ['MSE', 'MAE'] + ['X-S'] + ['JSD', 'EMD', 'KSD', 'KLD'] + ['Inputs', '
 
 # CUTS ON SIGNAL AND BACKGROUND SAMPLES
 cuts  = ['(sample["pt"] >= 0)', '(sample["weights"] <= 200)']
-#cuts += ['(sample["M"] >= 150)', '(sample["M"] <= 190)']
+#cuts += ['(sample["M"] >= 150)', '(sample["M"] <= 200)']
 sig_cuts = cuts + ['(sample["pt"] <= 2000)']
-bkg_cuts = cuts + ['(sample["pt"] <= 2000)']
+bkg_cuts = cuts + ['(sample["pt"] <= 6000)']
 
 
 # SAMPLES SIZES
@@ -73,7 +73,8 @@ args.model_out  = args.output_dir+'/'+args.model_out
 args.scaler_in  = args.output_dir+'/'+args.scaler_in
 args.scaler_out = args.output_dir+'/'+args.scaler_out
 if args.model_in != args.output_dir+'/':
-    if not os.path.isfile(args.model_in): sys.exit()
+    if not os.path.isfile(args.model_in):
+        sys.exit()
     print('\nLoading pre-trained weights from:', args.model_in)
     sys.stdout = open(os.devnull, 'w') #Suppressing screen output
     sample = make_sample(args.sample_type, args.n_dims, args.n_constituents, 'qcd', 'W',
@@ -100,11 +101,12 @@ if args.n_epochs > 0:
     plot_samples = [deepcopy(train_sample), train_sample] if args.weight_type=='flat_pt' else train_sample
     sig_bins, bkg_bins = 100, 100
     train_sample = reweight_sample(train_sample, sig_bins, bkg_bins, weight_type=args.weight_type)
-    plot_distributions(plot_samples, args.output_dir, sig_bins, bkg_bins, var='pt', log=True)
+    plot_var = 'M' if args.weight_type=='M' else 'pt'
+    plot_distributions(plot_samples, args.output_dir, sig_bins, bkg_bins, plot_var, sig_tag='W')
     print('\nVALIDATION SAMPLE:')
     valid_sample = make_sample(args.sample_type, args.n_dims, args.n_constituents, 'qcd', 'W',
                                args.n_valid, args.n_W, bkg_cuts, sig_cuts, adjust_weights=False)
-    valid_sample = reweight_sample(valid_sample, sig_bins=20, bkg_bins=20, weight_type=args.weight_type)
+    valid_sample = reweight_sample(valid_sample, sig_bins=100, bkg_bins=100, weight_type=args.weight_type)
     if args.scaling == 'ON':
         if not os.path.isfile(args.scaler_in):
             JZW    = train_sample['JZW']
@@ -113,11 +115,11 @@ if args.n_epochs > 0:
         valid_sample['constituents'] = apply_scaler(valid_sample['constituents'], args.n_dims, scaler)
     train_sample, train_sample_OE = separate_sample(train_sample)
     valid_sample, valid_sample_OE = separate_sample(valid_sample)
-    print('\nTraining     sample:', format(len(train_sample['weights']), '7.0f'), 'jets'  )
+    print('\nTraining     sample:', format(len(train_sample['weights']), '7.0f'), 'jets')
     print(  'Valididation sample:', format(len(valid_sample['weights']), '7.0f'), 'jets')
     train_dataset = make_datasets(train_sample, train_sample_OE, args.batch_size)
     valid_dataset = make_datasets(valid_sample, valid_sample_OE, args.batch_size)
-    build_model(model, train_dataset, valid_dataset, args.n_epochs, args.beta, args.lamb, args.lr)
+    build_model(model, train_dataset, valid_dataset, args.OE_type, args.n_epochs, args.beta, args.lamb, args.lr)
     print('\nSaving mode weights to:', args.model_out)
     model.save_weights(args.model_out)
 
@@ -128,7 +130,8 @@ sample = make_sample(args.sample_type, args.n_dims, args.n_constituents, 'qcd', 
                      args.n_test, args.n_top, bkg_cuts, sig_cuts, adjust_weights=True)
 sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
 y_true = np.where(sample['JZW']==-1, 0, 1)
-#plot_distributions(sample, args.output_dir, sig_bins=200, bkg_bins=600, var='pt', log=True); sys.exit()
+#plot_distributions(sample, args.output_dir, sig_bins=200, bkg_bins=200, plot_var='M', sig_tag='top')
+#print(bump_hunter(sample, args.output_dir, cut_type='no_cut', make_histo=False)); sys.exit()
 if args.scaling=='ON':
     X_true = apply_scaler(sample['constituents'], args.n_dims, scaler)
 else:
@@ -141,17 +144,26 @@ for n in np.arange(args.n_iter):
 X_pred = np.mean(X_pred, axis=2); print()
 
 
+# BKG SUPPRESION AND MASS SCULPTING METRIC
+if args.OE_type=='KLD' and 'Latent' in metrics:
+    wp_metric = 'Latent'
+else:
+    wp_metric = 'MSE'
+
+
 # CUT ON RECONSTRUCTION LOSS
 if args.apply_cut == 'ON' or args.bump_hunter == 'ON':
-    cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, args.n_dims, model, 'MSE', 'gain')
-    if args.bump_hunter == 'ON':
-        bump_hunter(np.where(cut_sample['JZW']==-1,0,1), cut_sample, args.output_dir)
-    samples = [sample, cut_sample]
-    plot_distributions(samples, args.output_dir, sig_bins=200, bkg_bins=200, var='M', normalize=False)
+    for cut_type in ['gain', 'sigma']:
+        cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, args.n_dims, model, wp_metric, cut_type)
+        if args.bump_hunter == 'ON':
+            bump_hunter(cut_sample, args.output_dir, cut_type)
+        samples = [sample, cut_sample]
+        plot_distributions(samples, args.output_dir, sig_bins=200, bkg_bins=200,
+                           plot_var='M', sig_tag='top', file_name='bkg_suppr_'+cut_type+'.png')
 
 
 # PLOTTING RESULTS
 if args.plotting == 'ON':
     if not os.path.isdir(args.output_dir):
         os.mkdir(args.output_dir)
-    plot_results(y_true, X_true, X_pred, sample, args.n_dims, model, metrics, args.output_dir)
+    plot_results(y_true, X_true, X_pred, sample, args.n_dims, model, metrics, wp_metric, args.output_dir)

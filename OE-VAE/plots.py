@@ -5,7 +5,8 @@ import sys, warnings
 from matplotlib    import pylab, ticker
 from sklearn       import metrics
 from scipy.spatial import distance
-from utils         import loss_function, inverse_scaler, get_4v
+from functools     import partial
+from utils         import loss_function, inverse_scaler, get_4v, bump_hunter
 
 
 def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metric, output_dir):
@@ -21,15 +22,52 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     if 'Latent' in metrics: #Adding latent space KLD metric and loss
         model(X_true)
         X_losses['Latent'] = model.losses[0].numpy()
+    max_significance(y_true, X_losses[wp_metric], sample, output_dir); sys.exit()
     arguments  = [(y_true, X_losses, sample['M'], sample['weights'], metrics, wp_metric, output_dir)]
     processes  = [mp.Process(target=mass_sculpting, args=arg) for arg in arguments]
     processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'gain' ))]
-    #processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'sigma'))]
+    processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'sigma'))]
     #arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
     #processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
     for job in processes: job.start()
     for job in processes: job.join()
+
+
+def max_significance(y_true, X_loss, sample, output_dir, n_cuts=200):
+    fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=sample['weights'])
+    step = max(1,len(fpr)//n_cuts)
+    fpr, tpr, losses = fpr[::step], tpr[::step], thresholds[::step]
+    sample = {key:sample[key] for key in ['JZW','M','weights']}
+    global get_sigma
+    def get_sigma(sample, X_loss, losses, tpr, idx):
+        cut_sample = {key:sample[key][X_loss>losses[idx]] for key in ['JZW','M','weights']}
+        try:
+            return 100*tpr[idx], bump_hunter(cut_sample, make_histo=False)
+        except:
+            return None, None
+    with mp.Pool() as pool:
+        pool_list = pool.map(partial(get_sigma, sample, X_loss, losses, tpr), np.arange(len(losses)))
+    sig_eff, sigma = zip(*list(pool_list))
+    sig_eff, sigma = [n for n in sig_eff if n!=None], [n for n in sigma if n!=None]
+    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    plt.plot(sig_eff, sigma, label='', color='tab:blue', lw=2, zorder=1)
+    max_val = sigma[-1]
+    plt.text(100.4, max_val, format(max_val,'.1f'), {'color':'gray', 'fontsize':12}, va="center", ha="left")
+    max_val = np.max(sigma)
+    max_eff = sig_eff[np.argmax(sigma)]
+    axes.axhline(max_val, xmin=max_eff/100, xmax=1, ls='--', linewidth=1., color='gray')
+    plt.text(100.4, max_val, format(max_val,'.1f'), {'color':'gray', 'fontsize':12}, va="center", ha="left")
+    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    axes.tick_params(axis='both', which='major', labelsize=14)
+    pylab.xlim(0, 100)
+    #pylab.ylim(np.floor(np.min(sigma)), np.ceil(np.max(sigma)))
+    pylab.ylim(0, 5)
+    plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
+    plt.ylabel('Significance', fontsize=25)
+    file_name = output_dir+'/'+'max_sigma.png'
+    print('Saving maximum significance to:', file_name); plt.savefig(file_name)
 
 
 def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
@@ -142,14 +180,14 @@ def signal_gain(sample, cut_sample, output_dir, n_bins=50, m_range=(0,200)):
 
 def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_tag,
                        normalize=False, density=True, log=True, file_name=''):
-    if sig_tag == 'qcd': sig_tag = r'$W$'
-    if sig_tag == 'top': sig_tag = r'$t\bar{t}$'
+    if sig_tag == 'W'  : tag = r'$W$'
+    if sig_tag == 'top': tag = r'$t\bar{t}$'
     if plot_var == 'pt':
         #labels = {0:[sig_tag,'QCD','All'], 1:[sig_tag+'$ (weighted)','QCD (weighted)','All (cut)']}
-        labels = {0:[sig_tag+' (X-S weighted)'       ,'QCD (X-S weighted)'       ,'All'],
-                  1:[sig_tag+' (flat $p_t$ weighted)','QCD (flat $p_t$ weighted)','All (cut)']}
+        labels = {0:[tag+' (X-S weighted)'       ,'QCD (X-S weighted)'       ,'All'],
+                  1:[tag+' (flat $p_t$ weighted)','QCD (flat $p_t$ weighted)','All (cut)']}
     if plot_var == 'M':
-        labels = {0:[sig_tag,'QCD','All'], 1:[sig_tag+' (cut)','QCD (cut)','All (cut)']}
+        labels = {0:[tag,'QCD','All'], 1:[tag+' (cut)','QCD (cut)','All (cut)']}
     colors = ['tab:orange', 'tab:blue', 'tab:brown']; alphas = [1, 0.5]
     n_bins = [sig_bins, bkg_bins, bkg_bins]
     xlabel = {'pt':'$p_t$', 'M':'$M$'}[plot_var]
@@ -166,7 +204,7 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_ta
             weights = sample['weights'][condition]
             min_val, max_val = np.min(variable), np.max(variable)
             if plot_var == 'M':
-                min_val, max_val = 0, 400 #571.3449
+                min_val, max_val = 0, 571.3449 #400
             bin_width = (max_val - min_val) / n_bins[n]
             bins      = [min_val + k*bin_width for k in np.arange(n_bins[n]+1)]
             if normalize:
@@ -189,7 +227,7 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_ta
         #pylab.xlim(0, 2000); pylab.ylim(1e-5, 1e4)
         pylab.xlim(0, 6000); pylab.ylim(1e0, 1e7)
     if plot_var == 'M':
-        pylab.xlim(0, 400); pylab.ylim(1e-1, 1e7)
+        pylab.xlim(0, 400); pylab.ylim(1e0, 1e7)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if not log: axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.tick_params(axis='both', which='major', labelsize=14)
@@ -199,7 +237,8 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_ta
     if normalize:
         y_label += ' (%)'
     elif sig_tag == 'top':
-        y_label += ' ('+r'36 fb$^{-1}$'+')'
+        #y_label += ' ('+r'36.2 fb$^{-1}$'+')'
+        y_label += ' ('+r'58.5 fb$^{-1}$'+')'
     plt.ylabel('Distribution' + y_label, fontsize=24)
     plt.legend(loc='upper right', ncol=1 if len(samples)==1 else 2, fontsize=18)
     if file_name == '':
@@ -289,7 +328,7 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, ROC_type='ga
     if ROC_type == 'sigma':
         val = ROC_var[-1]
         axes.axhline(val, xmin=0, xmax=1, ls='--', linewidth=1., color='gray')
-        plt.text(100.4, val, format(val,'.2f'), {'color':'gray', 'fontsize':12}, va="center", ha="left")
+        plt.text(100.4, val, format(val,'.1f'), {'color':'gray', 'fontsize':12}, va="center", ha="left")
     pylab.xlim(1,100)
     pylab.ylim(0,np.ceil(max_ROC_var))
     plt.xscale('log')

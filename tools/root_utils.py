@@ -12,32 +12,41 @@ def get_files(main_path, paths):
             for root_file in os.listdir(main_path+'/'+path)]) for path in paths}
 
 
-def get_data(root_list, var_list, jet_var, n_constituents):
+def get_data(root_list, var_list, jet_var, n_constituents, library):
     start_time = time.time()
     with mp.Pool() as pool:
         root_tuples = list(itertools.product(root_list, var_list))
-        arrays_list = pool.map(partial(root_conversion, jet_var, n_constituents), root_tuples)
+        arrays_list = pool.map(partial(root_conversion, jet_var, n_constituents, library), root_tuples)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return {key:np.concatenate([n[1] for n in arrays_list if key in n[0]]) for key in var_list}
 
 
-def root_conversion(jet_var, n_constituents, root_tuple):
+def root_conversion(jet_var, n_constituents, library, root_tuple):
     root_file, key = root_tuple
     tag = root_file.split('.')[2]
-    arrays = uproot.open(root_file)[key].array(library='ak')
+    arrays = uproot.open(root_file)[key].array(library=library)
     if key in jet_var:
-        arrays = [np.pad(ak.to_numpy(n[0]), (0,max(n_constituents-len(n[0]),0)),'constant')[:n_constituents]
-                  for n in arrays]
+        if library == 'ak':
+            arrays = [ak.to_numpy(n[0]) for n in arrays]
+        else:
+            arrays = [            n[0]  for n in arrays]
+        arrays = [np.pad(n, (0,max(n_constituents-len(n),0)),'constant')[:n_constituents] for n in arrays]
         arrays = np.float16(np.vstack(arrays)/1000. if key=='rljet_assoc_cluster_pt' else np.vstack(arrays))
         print(format(key,'23s'), 'converted from', '...'+tag+'...'+root_file.split('._')[-1])
     else:
-        arrays = np.reshape(ak.to_numpy(arrays), (len(arrays),))
+        if library == 'ak':
+            arrays = ak.to_numpy(arrays)
+        arrays = np.reshape(arrays, (len(arrays),))
         if key == 'weight_mc':
             arrays *= weights_factor(tag)
     return root_tuple, arrays
 
 
 def weights_factor(jet_tag):
+    '''
+    #===============================================================================
+    #========= topo-clusters =======================================================
+    #===============================================================================
     #DIJET simulation (en ordre de dataset: JZ3, JZ4, JZ5, etc.)
     DSIDsDijet        = ['361023', '361024', '361025', '361026', '361027',
                          '361028', '361029', '361030', '361031', '361032']
@@ -45,13 +54,33 @@ def weights_factor(jet_tag):
                                  625.03,        19.639,       1.1962,      0.042259,     0.0010367] # in fb
     filtEffDijet      = [3.2016E-04, 5.3138E-04, 9.2409E-04, 9.4242E-04, 3.9280E-04,
                          1.0176E-02, 1.2076E-02, 5.9087E-03, 2.6761E-03, 4.2592E-04]
-    NeventsDijet      = [15879500. , 15925500. , 15993500. , 17834000. , 15983000. ,
+    NeventsDijet      = [15362751. , 15925231. , 15993500. , 17834000. , 15983000. ,
                          15999000. , 13915500. , 13985000. , 15948000. , 15995600. ]
     #TTBar simulation
     DSIDsTtbar        = ['410284', '410285', '410286', '410287', '410288']
     crossSecTtbar     = [831760, 831760, 831760, 831760, 831760] # in fb
     filtEffTtbar      = [3.8853E-03, 1.5818E-03, 6.8677E-04, 4.2095E-04, 2.3943E-04]
-    sumofweightsTtbar = [436767582., 136981616., 66933351. , 51910542. , 31469215.]
+    sumofweightsTtbar = [3.17751e+08, 1.00548e+08, 4.96933e+07, 3.87139e+07, 2.32803e+07]
+    #===============================================================================
+    '''
+    #===============================================================================
+    #========= UFO =================================================================
+    #===============================================================================
+    #DIJET simulation (en ordre de dataset: JZ3, JZ4, JZ5, etc.)
+    DSIDsDijet        = ['364703', '364704', '364705', '364706', '364707',
+                         '364708', '364709', '364710', '364711', '364712']
+    crossSecDijet      = [26454000000.00, 254630000.000, 4553500.0000, 257530.000000, 16215.0000000,
+                                  625.03,        19.639,       1.1962,      0.042259,     0.0010367] # in fb
+    filtEffDijet       = [1.1658E-02, 1.3366E-02, 1.4526E-02, 9.4734E-03, 1.1097E-02,
+                          1.0156E-02, 1.2056E-02, 5.8933E-03, 2.6730E-03, 4.2889E-04]
+    NeventsDijet       = [258.536   , 8.67297    , 0.345287   , 0.0389311  , 0.00535663,
+                          0.00154999, 0.000271431, 3.20958e-05, 2.10202e-06, 9.86921e-06]
+    #TTBar simulation
+    DSIDsTtbar         = ['410284', '410285', '410286', '410287', '410288']
+    crossSecTtbar      = [7.2978E+05, 7.2976E+05, 7.2978E+05, 7.2975E+05, 7.2975E+05] # in fb
+    filtEffTtbar       = [3.8208E-03, 1.5782E-03, 6.9112E-04, 4.1914E-04, 2.3803E-04]
+    sumofweightsTtbar  = [4.23372e+08, 1.78314e+08, 8.72442e+07, 8.33126e+07, 3.69924e+07]
+    #===============================================================================
     if jet_tag in DSIDsDijet:
         tag_dict = dict(zip(DSIDsDijet, np.array(crossSecDijet)*np.array(filtEffDijet)/np.array(NeventsDijet)))
     if jet_tag in DSIDsTtbar:
@@ -147,12 +176,15 @@ def jet_processing(jet):
     return jet
 
 
-'''
-def constituent_count(root_files):
+def count_constituents(root_files):
     with mp.Pool() as pool:
         root_list = np.sum(list(root_files.values()))
+        print('PROCESSED FILES:')
+        for root_file in root_list:
+            print(root_file)
         return np.max(pool.map(max_constituents, root_list))
-def max_constituents(root_files):
-    events = uproot.open(root_files)['nominal']['rljet_assoc_cluster_pt'].array(library='ak')
-    return np.max([len(n[0]) for n in events])
-'''
+def max_constituents(root_file):
+    #events = uproot.open(root_file)['rljet_assoc_cluster_pt'].array(library='ak')
+    #return np.max([len(n[0]) for n in events])
+    events = uproot.open(root_file)['rljet_n_constituents'].array(library='np')
+    return np.max([n for n in events])

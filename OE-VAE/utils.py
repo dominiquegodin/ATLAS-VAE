@@ -17,13 +17,15 @@ def make_datasets(sample, sample_OE, batch_size=1):
 
 def make_sample(sample_type, n_dims, n_constituents, bkg_tag, sig_tag,
                 bkg_idx, sig_idx, bkg_cuts, sig_cuts, adjust_weights):
-    #data_path = '/opt/tmp/godin/AD_data'
-    data_path = '/lcg/storage19/atlas/nguyenn/AD_data_UFO'
-    if sample_type == 'Atlas':
-        data_files = {'qcd':'Atlas_MC_dijet.h5'  , 'W':'resamples_oe_w.h5', 'top':'Atlas_MC_ttbar.h5'}
+    data_path = '/opt/tmp/godin/AD_data'
+    #data_path = '/lcg/storage19/atlas/nguyenn/AD_data_UFO'
     if sample_type == 'Delphes':
-        data_files = {'qcd':'qcd_preprocessed.h5', 'W':'resamples_oe_w.h5', 'top':'top_m174_02_preprocessed.h5'}
+        data_files = {'qcd':'Delphes_dijet.h5'   , 'top':'Delphes_ttbar.h5'   , 'W':'resamples_oe_w.h5'}
         adjust_weights = False
+    if sample_type == 'Atlas_topo':
+        data_files = {'qcd':'Atlas_topo_dijet.h5', 'top':'Atlas_topo_ttbar.h5', 'W':'resamples_oe_w.h5'}
+    if sample_type == 'Atlas_UFO':
+        data_files = {'qcd':'Atlas_UFO_dijet.h5' , 'top':'Atlas_UFO_ttbar.h5' , 'W':'resamples_oe_w.h5'}
     bkg_file = data_path + '/' + data_files[bkg_tag]
     sig_file = data_path + '/' + data_files[sig_tag]
     if np.isscalar(bkg_idx): bkg_idx = (0, bkg_idx)
@@ -55,15 +57,17 @@ def make_sample(sample_type, n_dims, n_constituents, bkg_tag, sig_tag,
 def load_data(data_file, tag, idx, n_constituents, adjust_weights, cuts):
     print('Loading', format(tag,'^3s'), 'sample', end=' ', flush=True)
     data     = h5py.File(data_file,"r"); start_time = time.time()
-    data_var = set(['pt','M','weights','JZW']) & set(data)
+    data_var = set(['pt','M','weights','JZW','rljet_m_comb']) & set(data)
     sample   = {key:np.float32(data[key][idx[0]:idx[1]]) for key in data_var if key!='constituents'}
     sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_constituents])
     if 4*n_constituents > data['constituents'].shape[1]:
-        shape = data['constituents'].shape
+        shape = sample['constituents'].shape
         zeros_array = np.zeros((shape[0], 4*n_constituents-shape[1]), dtype=np.float32)
         sample['constituents'] = np.hstack([sample['constituents'], zeros_array])
     if len(set(sample) & {'pt','M'}) == 0:
         sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
+    #Using m_comb instead of m_calo
+    #sample['M'] = sample['rljet_m_comb']/1000
     if 'JZW' not in sample:
         sample['JZW'] = np.full(len(sample['constituents']), 0 if tag=='qcd' else -1, dtype=np.float32)
     if 'weights' not in sample:
@@ -100,7 +104,6 @@ def reweight_sample(sample, sig_bins, bkg_bins, weight_type='X-S'):
     sig, bkg = sample['JZW']==-1, sample['JZW']>=0
     if weight_type == 'M':
         sample['weights'][sig] = W_weighting(sample['M'][bkg], sample['weights'][bkg], sample['M'][sig])
-        print( len(sample['M'][sig]), len(sample['weights'][sig]) )
     if weight_type == None or weight_type.lower() == 'none':
         if np.any(sig):
             sig_weights = sample['weights'][sig]
@@ -208,8 +211,10 @@ def jets_3v(sample, n_dims, idx=[0,None]):
 
 def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=True):
     if metric in ['KLD', 'X-S', 'JSD']:
-        P, Q = np.maximum(np.float64(P), delta), np.maximum(np.float64(Q), delta)
-    if metric in ['Inputs']: loss = np.mean(P, axis=1)
+        P = np.maximum(np.float64(P), delta)
+        Q = np.maximum(np.float64(Q), delta)
+    if metric in ['Inputs']:
+        loss = np.mean(P, axis=1)
     if metric in ['JSD', 'KSD', 'EMD']:
         idx_tuples = get_idx(len(P), n_sets=mp.cpu_count()//3)
         target     = JSD if metric=='JSD' else KSD if metric=='KSD' else EMD
@@ -276,8 +281,10 @@ def best_threshold(y_true, X_loss, X_mass, weights, cut_type):
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
     len_0      = np.sum(fpr==0)
     thresholds = thresholds[len_0:][tpr[len_0:]>0.01]
-    if cut_type=='gain' : cut_values = (tpr[len_0:]/fpr[len_0:])         [tpr[len_0:]>0.01]
-    if cut_type=='sigma': cut_values = (tpr[len_0:]/np.sqrt(fpr[len_0:]))[tpr[len_0:]>0.01]
+    if cut_type=='gain' :
+        cut_values = (tpr[len_0:]/fpr[len_0:])         [tpr[len_0:]>0.01]
+    if cut_type=='sigma':
+        cut_values = (tpr[len_0:]/np.sqrt(fpr[len_0:]))[tpr[len_0:]>0.01]
     cut_index = np.argmax(cut_values)
     if cut_type=='sigma':
         n_sig = np.sum(weights[y_true==0])
@@ -295,26 +302,37 @@ def apply_best_cut(y_true, X_true, X_pred, sample, n_dims, model, metric, cut_ty
     loss_cut, loss_val = best_threshold(y_true, X_loss, sample['M'], sample['weights'], cut_type)
     print('Best', metric, 'cut on '+format(cut_type,'5s')+':', metric, '>=', end= ' ')
     print(format(loss_cut, '.3f')+' / best '+format(cut_type,'5s'), '=', format(loss_val, '>5.2f'))
-    sample = {key:sample[key][X_loss > loss_cut] for key in sample}
+    sample = {key:sample[key][X_loss>loss_cut] for key in sample}
     return sample
 
 
-def bump_hunter(y_true, sample, output_dir, cut_type, m_range=[120,200]):
-    import pyBumpHunter as BH #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
-    print()
+def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[120,200], bins=50, make_histo=True):
+    #import pyBumpHunter as BH
+    sys.path.append('../')
+    from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
+    y_true = np.where(sample['JZW']==-1, 0, 1)
     data, data_weights = sample['M']    , sample['weights']
     bkg , bkg_weights  = data[y_true==1], data_weights[y_true==1]
-    data_hist, bin_edges = np.histogram(data, bins=50, range=m_range, weights=data_weights)
-    bkg_hist , bin_edges = np.histogram(bkg , bins=50, range=m_range, weights= bkg_weights)
+    data_hist, bin_edges = np.histogram(data, bins=bins, range=m_range, weights=data_weights)
+    bkg_hist , bin_edges = np.histogram(bkg , bins=bins, range=m_range, weights= bkg_weights)
     start_time = time.time()
     """ BumpHunter1D class instance """
-    hunter = BH.BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
+    #hunter = BH.BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
+    #                         npe=10000, nworker=1, seed=0, bins=bin_edges)
+    hunter = BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
                              npe=10000, nworker=1, seed=0, bins=bin_edges)
-    hunter.bump_scan(data_hist, bkg_hist, is_hist=True)
-    hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=output_dir+'/'+'bump_hunt_'+cut_type+'.png')
-    hunter.print_bump_info()
-    hunter.print_bump_true(data_hist, bkg_hist, is_hist=True)
-    print(format(time.time() - start_time, '2.1f'), '\b'+' s')
+    hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=False if output_dir==None else True)
+    if output_dir==None:
+        filename = None
+    else:
+        filename = output_dir+'/'+'bump_hunt_'+cut_type+'.png'
+    max_sig = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
+    if make_histo:
+        hunter.print_bump_info()
+        hunter.print_bump_true(data_hist, bkg_hist, is_hist=True)
+        print(format(time.time() - start_time, '2.1f'), '\b'+' s')
+    else:
+        return max_sig
 
 
 def get_idx(size, start_val=0, n_sets=8):

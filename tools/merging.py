@@ -25,7 +25,7 @@ def file_processing(data_path, n_files=40, n_tasks=10):
 
 
 def mix_samples(data_path, data_files, idx_list, file_idx, out_idx):
-    type_dict = {'constituents':np.float16, 'weights':np.float64, 'rljet_n_constituents':np.uint8}
+    type_dict = {'constituents':np.float16, 'rljet_n_constituents':np.uint8}
     keys = [key for key in h5py.File(data_path+'/'+data_files[0],'r')]
     for key in keys:
         sample_list = []
@@ -45,7 +45,6 @@ def mix_samples(data_path, data_files, idx_list, file_idx, out_idx):
         dtype     = type_dict[key] if key in type_dict else data.dtype
         shape     = (len(sample),) + sample.shape[1:]
         maxshape  = (None,) + sample.shape[1:]
-        #dtype     = type_dict[key] if key in type_dict else np.float32
         chunks    = (10000,)+sample.shape[1:]
         data      = h5py.File(data_path+'/'+file_name, attribute, rdcc_nbytes=20*1024**3, rdcc_nslots=10000019)
         data.create_dataset(key, shape, maxshape=maxshape, dtype=dtype, compression='lzf', chunks=chunks)
