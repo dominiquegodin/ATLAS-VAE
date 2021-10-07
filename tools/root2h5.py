@@ -8,18 +8,18 @@ from merging    import file_processing
 
 # PROGRAM ARGUMENTS
 parser = ArgumentParser()
-parser.add_argument( '--tag'       , '--names-list', nargs='+', default = []    )
-parser.add_argument( '--luminosity',  type = float            , default = 58.45 )
-parser.add_argument( '--merging'                              , default = 'OFF' ) #(36.21:topo, 58.45:UFO))
-parser.add_argument( '--library'                              , default = 'np'  ) #('np':fast, 'ak':slow)
+parser.add_argument( '--tag', '--names-list', nargs='+', default = []    )
+parser.add_argument( '--sample_type'                   , default = 'UFO' )
+parser.add_argument( '--merging'                       , default = 'OFF' )
+parser.add_argument( '--library'                       , default = 'np'  ) #('np':fast, 'ak':slow)
 args = parser.parse_args()
 
 
 # INPUT/OUTPUT PATHS
-#input_path  = '/nvme1/atlas/godin/AD_data/rootfiles'
-input_path  = '/lcg/storage19/atlas/nguyenn/Jacinthe/rootfiles'
-#if not os.path.isdir(input_path):
-#    input_path = '/lcg/storage18/atlas/pilette/atlasdata/rootfiles'
+if args.sample_type == 'UFO':
+    input_path  = '/lcg/storage19/atlas/nguyenn/Jacinthe/rootfiles'
+else:
+    input_path  = '/nvme1/atlas/godin/AD_data/rootfiles'
 output_path = '/nvme1/atlas/godin/AD_data'
 dijet_label = 'Atlas_MC_dijet'
 ttbar_label = 'Atlas_MC_ttbar'
@@ -31,30 +31,32 @@ if args.merging == 'ON':
 
 
 # ROOT VARIABLES
-scalars = ['rljet_m_comb'    , 'rljet_pt_calo'   , 'rljet_ECF3'      , 'rljet_C2'       , 'rljet_D2'         ,
-           'rljet_Tau1_wta'  , 'rljet_Tau2_wta'  , 'rljet_Tau3_wta'  , 'rljet_Tau32_wta', 'rljet_FoxWolfram2',
-           'rljet_PlanarFlow', 'rljet_Angularity', 'rljet_Aplanarity', 'rljet_ZCut12'   , 'rljet_Split12'    ,
-           'rljet_Split23'   , 'rljet_KtDR'      , 'rljet_Qw'        , 'rljet_eta'      , 'rljet_phi'        ]
+scalars = ['rljet_m_calo'   , 'rljet_m_comb'     , 'rljet_pt_calo'   , 'rljet_pt_comb'   , 'rljet_ECF3'      ,
+           'rljet_C2'       , 'rljet_D2'         , 'rljet_Tau1_wta'  , 'rljet_Tau2_wta'  , 'rljet_Tau3_wta'  ,
+           'rljet_Tau32_wta', 'rljet_FoxWolfram2', 'rljet_PlanarFlow', 'rljet_Angularity', 'rljet_Aplanarity',
+           'rljet_ZCut12'   , 'rljet_Split12'    , 'rljet_Split23'   , 'rljet_KtDR'      , 'rljet_Qw'        ,
+           'rljet_eta'      , 'rljet_phi'                                                                    ]
 jet_var = ['rljet_assoc_cluster_pt', 'rljet_assoc_cluster_eta', 'rljet_assoc_cluster_phi'                    ]
 others  = ['weight_mc', 'weight_pileup', 'rljet_topTag_DNN19_qqb_score', 'rljet_n_constituents'              ]
 
 
 # QCD AND TOP TAGS
-#qcd_tags = ['361023', '361024', '361025', '361026', '361027', #for topo-clusters
-#            '361028', '361029', '361030', '361031', '361032']
-qcd_tags = ['364703', '364704', '364705', '364706', '364707', #for UFO jets
-            '364708', '364709', '364710', '364711', '364712']
+if args.sample_type == 'UFO':
+    qcd_tags = ['364703', '364704', '364705', '364706', '364707',
+                '364708', '364709', '364710', '364711', '364712']
+else:
+    qcd_tags = ['361023', '361024', '361025', '361026', '361027',
+                '361028', '361029', '361030', '361031', '361032']
 top_tags = ['410284', '410285', '410286', '410287', '410288']
-
 
 # OUTPUT DATA FILES
 if 'ttbar' in args.tag or int(args.tag[0]) >= len(qcd_tags):
-    n_constituents = 196
+    n_constituents = 196 if args.sample_type=='UFO' else 79
     JZW = -1
     tag_list = top_tags
     output_file = ttbar_label+'.h5'
 else:
-    n_constituents = 100
+    n_constituents = 1377 if args.sample_type=='UFO' else 100
     JZW = int(args.tag[0])
     tag_list = [qcd_tags[JZW]]
     output_file = dijet_label+'_'+qcd_tags[JZW]+'.h5'
@@ -63,7 +65,7 @@ else:
 # INPUT DATA PATHS
 data_paths = sorted([path for path in os.listdir(input_path) if path.split('.')[2] in qcd_tags+top_tags])
 root_files = get_files(input_path, data_paths)
-#print(count_constituents(root_files))
+#print(count_constituents(root_files)); sys.exit()
 root_list  = np.concatenate([root_files[tag] for tag in tag_list])
 #for tag in tag_list:
 #    for root_file in root_files[tag]: print(root_file)
@@ -73,10 +75,11 @@ root_list  = np.concatenate([root_files[tag] for tag in tag_list])
 
 # READING AND PROCESSING ROOT DATA
 var_list  = scalars + jet_var + others
-root_data = get_data(root_list, var_list, jet_var, n_constituents, args.library)
+root_data = get_data(root_list, var_list, jet_var, n_constituents, args.sample_type, args.library)
 if np.all([n in var_list for n in jet_var]):
     root_data.update(final_jets({key:root_data.pop(key) for key in jet_var}))
-root_data['weights'] = args.luminosity*root_data.pop('weight_mc')*root_data.pop('weight_pileup')
+luminosity = 58.45 if args.sample_type=='UFO' else 36.21
+root_data['weights'] = luminosity*root_data.pop('weight_mc')*root_data.pop('weight_pileup')
 #for key in root_data: print(format(key,'28s'), root_data[key].shape, root_data[key].dtype)
 
 
