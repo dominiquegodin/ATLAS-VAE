@@ -25,11 +25,6 @@ dijet_label = 'Atlas_MC_dijet'
 ttbar_label = 'Atlas_MC_ttbar'
 
 
-# MERGING AND MIXING DATA FILES
-if args.merging == 'ON':
-    file_processing(output_path+'/'+dijet_label)
-
-
 # ROOT VARIABLES
 scalars = ['rljet_m_calo'   , 'rljet_m_comb'     , 'rljet_pt_calo'   , 'rljet_pt_comb'   , 'rljet_ECF3'      ,
            'rljet_C2'       , 'rljet_D2'         , 'rljet_Tau1_wta'  , 'rljet_Tau2_wta'  , 'rljet_Tau3_wta'  ,
@@ -49,6 +44,7 @@ else:
                 '361028', '361029', '361030', '361031', '361032']
 top_tags = ['410284', '410285', '410286', '410287', '410288']
 
+
 # OUTPUT DATA FILES
 if 'ttbar' in args.tag or int(args.tag[0]) >= len(qcd_tags):
     n_constituents = 196 if args.sample_type=='UFO' else 79
@@ -56,10 +52,15 @@ if 'ttbar' in args.tag or int(args.tag[0]) >= len(qcd_tags):
     tag_list = top_tags
     output_file = ttbar_label+'.h5'
 else:
-    n_constituents = 1377 if args.sample_type=='UFO' else 100
+    n_constituents = 377 if args.sample_type=='UFO' else 100
     JZW = int(args.tag[0])
     tag_list = [qcd_tags[JZW]]
     output_file = dijet_label+'_'+qcd_tags[JZW]+'.h5'
+
+
+# MERGING AND MIXING DATA FILES
+if args.merging == 'ON':
+    file_processing(output_path+'/'+dijet_label, n_constituents); sys.exit()
 
 
 # INPUT DATA PATHS
