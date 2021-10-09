@@ -5,7 +5,7 @@ from   sklearn import utils
 from   root_utils import get_idx
 
 
-def file_processing(data_path, n_files=40, n_tasks=10, n_constituents=300):
+def file_processing(data_path, n_constituents, n_files=40, n_tasks=10):
     data_files = sorted([h5_file for h5_file in os.listdir(data_path) if '.h5' in h5_file])
     n_jets     = [len(h5py.File(data_path+'/'+h5_file,'r')['constituents']) for h5_file in data_files]
     idx_list   = [get_idx(jet, n_sets=n_files) for jet in n_jets]
