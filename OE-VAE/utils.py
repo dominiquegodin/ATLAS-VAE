@@ -15,31 +15,27 @@ def make_datasets(sample, sample_OE, batch_size=1):
     return dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
 
 
-def make_sample(sample_type, n_dims, n_constituents, bkg_tag, sig_tag,
-                bkg_idx, sig_idx, bkg_cuts, sig_cuts, adjust_weights):
-    data_path = '/opt/tmp/godin/AD_data'
-    #data_path = '/lcg/storage19/atlas/nguyenn/AD_data_UFO'
-    if sample_type == 'Delphes':
-        data_files = {'qcd':'Delphes_dijet.h5'   , 'top':'Delphes_ttbar.h5'   , 'W':'resamples_oe_w.h5'}
-        adjust_weights = False
-    if sample_type == 'Atlas_topo':
-        data_files = {'qcd':'Atlas_topo_dijet.h5', 'top':'Atlas_topo_ttbar.h5', 'W':'resamples_oe_w.h5'}
-    if sample_type == 'Atlas_UFO':
-        data_files = {'qcd':'Atlas_UFO_dijet.h5' , 'top':'Atlas_UFO_ttbar.h5' , 'W':'resamples_oe_w.h5'}
-    bkg_file = data_path + '/' + data_files[bkg_tag]
-    sig_file = data_path + '/' + data_files[sig_tag]
+def make_sample(n_dims, n_constituents, bkg, sig, bkg_idx, sig_idx,
+                bkg_cuts='', sig_cuts='', dsids=None, adjust_weights=False):
+    data_path  = '/opt/tmp/godin/AD_data'
+    data_files = {'qcd-Delphes':'Delphes_dijet.h5'   , 'top-Delphes':'Delphes_ttbar.h5'   ,
+                  'qcd-topo'   :'Atlas_topo-dijet.h5', 'top-topo'   :'Atlas_topo-ttbar.h5',
+                  'qcd-UFO'    :'Atlas_UFO-dijet.h5' , 'top-UFO'    :'Atlas_UFO-ttbar.h5' ,
+                  'BSM'        :'Atlas_BSM.h5'       ,  'W'         :'resamples_oe_w.h5'  }
+    bkg_file = data_path + '/' + data_files[bkg]
+    sig_file = data_path + '/' + data_files[sig]
     if np.isscalar(bkg_idx): bkg_idx = (0, bkg_idx)
     if np.isscalar(sig_idx): sig_idx = (0, sig_idx)
     if sig_idx[0] != sig_idx[1]:
-        sig_sample = load_data(sig_file, sig_tag, sig_idx, n_constituents, adjust_weights, cuts=sig_cuts)
+        sig_sample = load_data(sig_file, sig, sig_idx, n_constituents, adjust_weights, sig_cuts, dsids)
     if bkg_idx[0] != bkg_idx[1]:
-        bkg_sample = load_data(bkg_file, bkg_tag, bkg_idx, n_constituents, adjust_weights, cuts=bkg_cuts)
+        bkg_sample = load_data(bkg_file, bkg, bkg_idx, n_constituents, adjust_weights, bkg_cuts)
     if   'sig_sample' not in locals():
         sample = bkg_sample
     elif 'bkg_sample' not in locals():
         sample = sig_sample
     else:
-        if sig_tag == 'W':
+        if sig == 'W':
             sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]), adjust_weights)
         sample = {key:np.concatenate([sig_sample[key], bkg_sample[key]])
                   for key in set(sig_sample) & set(bkg_sample)}
@@ -54,11 +50,11 @@ def make_sample(sample_type, n_dims, n_constituents, bkg_tag, sig_tag,
     return sample
 
 
-def load_data(data_file, tag, idx, n_constituents, adjust_weights, cuts):
+def load_data(data_file, tag, idx, n_constituents, adjust_weights, cuts, dsids=None):
     print('Loading', format(tag,'^3s'), 'sample', end=' ', flush=True)
     data     = h5py.File(data_file,"r"); start_time = time.time()
-    data_var = set(['pt','M','weights','JZW','rljet_m_comb']) & set(data)
-    sample   = {key:np.float32(data[key][idx[0]:idx[1]]) for key in data_var if key!='constituents'}
+    var_list = ['pt','M','weights','JZW','rljet_m_comb','rljet_n_constituents','DSID']
+    sample   = {key:data[key][idx[0]:idx[1]] for key in set(var_list)&set(data) if key!='constituents'}
     sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_constituents])
     if 4*n_constituents > data['constituents'].shape[1]:
         shape = sample['constituents'].shape
@@ -66,21 +62,28 @@ def load_data(data_file, tag, idx, n_constituents, adjust_weights, cuts):
         sample['constituents'] = np.hstack([sample['constituents'], zeros_array])
     if len(set(sample) & {'pt','M'}) == 0:
         sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
-    #Using m_comb instead of m_calo
-    #sample['M'] = sample['rljet_m_comb']/1000
+    if 'rljet_m_comb' in sample:
+        sample['m_comb'] = sample.pop('rljet_m_comb')
     if 'JZW' not in sample:
         sample['JZW'] = np.full(len(sample['constituents']), 0 if tag=='qcd' else -1, dtype=np.float32)
+    if 'DSID' not in sample:
+        sample['DSID'] = np.full(len(sample['constituents']), -1, dtype=np.int32)
     if 'weights' not in sample:
         sample['weights'] = np.full(len(sample['constituents']), 1, dtype=np.float32)
+    """ Applying sample cuts"""
     cut_list = [np.full_like(sample['weights'], True)]
     for cut in cuts:
         try: cut_list.append(eval(cut))
         except KeyError: pass
     cuts = np.logical_and.reduce(cut_list)
-    if adjust_weights:
-        sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
+    if dsids != None:
+        dsid_cuts = np.logical_or.reduce([sample['DSID'] == int(n) for n in dsids])
+        cuts = np.logical_and(cuts, dsid_cuts)
     if not np.all(cuts):
         sample = {key:sample[key][cuts] for key in sample}
+    """ Adjusting weights for cross-section """
+    if adjust_weights:
+        sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
 
@@ -163,15 +166,20 @@ def jets_4v(sample):
     processes  = [mp.Process(target=get_4v, args=(sample, idx, return_dict)) for idx in idx_tuples]
     for task in processes: task.start()
     for task in processes: task.join()
-    return {key:np.concatenate([return_dict[idx][key] for idx in idx_tuples]) for key in ['E','pt','M']}
+    #return {key:np.concatenate([return_dict[idx][key] for idx in idx_tuples])
+    #        for key in return_dict[idx_tuples[0]]}
+    return {key:np.concatenate([return_dict[idx].pop(key) for idx in idx_tuples])
+            for key in return_dict[idx_tuples[0]]}
 def get_4v(sample, idx=(0,None), return_dict=None):
     sample = np.float32(sample[idx[0]:idx[1]])
     sample = np.sum(np.reshape(sample, (-1,int(sample.shape[1]/4),4)), axis=1)
     E, px, py, pz = [sample[:,n] for n in np.arange(sample.shape[-1])]
     pt = np.sqrt(px**2 + py**2)
     M  = np.sqrt(np.maximum(0, E**2 - px**2 - py**2 - pz**2))
-    if idx == (0,None): return {'E':E, 'pt':pt, 'M':M}
-    else: return_dict[idx]  =  {'E':E, 'pt':pt, 'M':M}
+    #calo_dict = {'E':E, 'pt_calo':pt, 'm_calo':M}
+    calo_dict = {'E':E, 'pt':pt, 'M':M}
+    if idx == (0,None): return calo_dict
+    else: return_dict[idx]  =  calo_dict
 
 
 def JSD(P, Q, idx, n_dims, return_dict, reshape=False):
@@ -306,9 +314,9 @@ def apply_best_cut(y_true, X_true, X_pred, sample, n_dims, model, metric, cut_ty
     return sample
 
 
-def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[120,200], bins=50, make_histo=True):
-    #import pyBumpHunter as BH
-    #sys.path.append('../')
+def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[120,200], bins=50,
+                make_histo=True, print_info=True):
+    #import pyBumpHunter as BH; sys.path.append('../')
     #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
     from BumpHunter.bumphunter_1dim import BumpHunter1D
     y_true = np.where(sample['JZW']==-1, 0, 1)
@@ -321,14 +329,12 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[120,200], bins=
     #hunter = BH.BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
     #                         npe=10000, nworker=1, seed=0, bins=bin_edges)
     hunter = BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
-                             npe=10000, nworker=1, seed=0, bins=bin_edges)
-    hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=False if output_dir==None else True)
-    if output_dir==None:
-        filename = None
-    else:
-        filename = output_dir+'/'+'bump_hunt_'+cut_type+'.png'
+                          npe=10000, nworker=1, seed=0, bins=bin_edges)
+    hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=make_histo and print_info)
+    filename = None if output_dir==None else output_dir+'/'+'bump_hunt-'+cut_type+'.png'
+    if make_histo: print('Saving bump hunting plot to:   ', filename)
     max_sig = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
-    if make_histo:
+    if make_histo and print_info:
         hunter.print_bump_info()
         hunter.print_bump_true(data_hist, bkg_hist, is_hist=True)
         print(format(time.time() - start_time, '2.1f'), '\b'+' s')

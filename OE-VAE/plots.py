@@ -6,11 +6,11 @@ from matplotlib    import pylab, ticker
 from sklearn       import metrics
 from scipy.spatial import distance
 from functools     import partial
-from utils         import loss_function, inverse_scaler, get_4v, bump_hunter
+from utils         import loss_function, inverse_scaler, get_4v, bump_hunter, make_sample
 
 
 def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metric, output_dir):
-    print('PLOTTING RESULTS:')
+    print('\nPLOTTING RESULTS:')
     manager = mp.Manager(); X_losses = manager.dict()
     X_true_dict = {metric:X_true for metric in metrics if metric!='Latent'}
     if False:
@@ -19,14 +19,14 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     processes = [mp.Process(target=loss_function, args=arg) for arg in arguments]
     for job in processes: job.start()
     for job in processes: job.join()
-    if 'Latent' in metrics: #Adding latent space KLD metric and loss
+    """ Adding latent space KLD metric and loss """
+    if 'Latent' in metrics:
         model(X_true)
         X_losses['Latent'] = model.losses[0].numpy()
     #max_significance(y_true, X_losses[wp_metric], sample, output_dir); sys.exit()
     arguments  = [(y_true, X_losses, sample['M'], sample['weights'], metrics, wp_metric, output_dir)]
     processes  = [mp.Process(target=mass_sculpting, args=arg) for arg in arguments]
-    processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'gain' ))]
-    processes += [mp.Process(target=ROC_curves, args=(y_true,X_losses,sample['weights'],metrics,output_dir,'sigma'))]
+    processes += [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     #arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
     #processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
@@ -34,40 +34,45 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     for job in processes: job.join()
 
 
-def max_significance(y_true, X_loss, sample, output_dir, n_cuts=20):
+def max_significance(y_true, X_loss, sample, output_dir, n_cuts=200):
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=sample['weights'])
     step = max(1,len(fpr)//n_cuts)
     fpr, tpr, losses = fpr[::step], tpr[::step], thresholds[::step]
     sample = {key:sample[key] for key in ['JZW','M','weights']}
     global get_sigma
     def get_sigma(sample, X_loss, losses, tpr, idx):
-        cut_sample = {key:sample[key][X_loss>losses[idx]] for key in ['JZW','M','weights']}
-        try:
-            return 100*tpr[idx], bump_hunter(cut_sample, make_histo=False)
-        except:
-            return None, None
+        cut_sample = {key:sample[key][X_loss>losses[idx]] for key in sample}
+        try: return 100*tpr[idx], bump_hunter(cut_sample, make_histo=False), losses[idx]
+        except: return None, None, None
     with mp.Pool() as pool:
         pool_list = pool.map(partial(get_sigma, sample, X_loss, losses, tpr), np.arange(len(losses)))
-    sig_eff, sigma = zip(*list(pool_list))
+    sig_eff, sigma, losses = zip(*list(pool_list))
     sig_eff, sigma = [n for n in sig_eff if n!=None], [n for n in sigma if n!=None]
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     plt.plot(sig_eff, sigma, label='', color='tab:blue', lw=2, zorder=1)
-    max_val = sigma[-1]
-    plt.text(100.4, max_val, format(max_val,'.1f'), {'color':'gray', 'fontsize':12}, va="center", ha="left")
+    end_val = sigma[-1]
+    plt.text(100.4, end_val, format(end_val,'.1f'), {'color':'gray', 'fontsize':14}, va="center", ha="left")
     max_val = np.max(sigma)
     max_eff = sig_eff[np.argmax(sigma)]
-    axes.axhline(max_val, xmin=max_eff/100, xmax=1, ls='--', linewidth=1., color='gray')
-    plt.text(100.4, max_val, format(max_val,'.1f'), {'color':'gray', 'fontsize':12}, va="center", ha="left")
+    axes.axhline(max_val, xmin=max_eff/100, xmax=1, ls='--', linewidth=1., color='dimgray')
+    plt.text(100.4, max_val, format(max_val,'.1f'), {'color':'dimgray', 'fontsize':14}, va="center", ha="left")
+    pylab.xlim(0, 100)
+    pylab.ylim(0, 5) #pylab.ylim(np.floor(np.min(sigma)), np.ceil(np.max(sigma)))
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.tick_params(axis='both', which='major', labelsize=14)
-    pylab.xlim(0, 100)
-    #pylab.ylim(np.floor(np.min(sigma)), np.ceil(np.max(sigma)))
-    pylab.ylim(0, 5)
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('Significance', fontsize=25)
     file_name = output_dir+'/'+'max_sigma.png'
     print('Saving maximum significance to:', file_name); plt.savefig(file_name)
+    """ Printing bkg suppression and bum hunting plots at maximum significance cut """
+    losses     = [n for n in losses if n!=None]
+    best_loss  = losses[np.argmax(sigma)]
+    cut_sample = {key:sample[key][X_loss>best_loss] for key in sample}
+    bump_hunter(cut_sample, output_dir, cut_type='best', print_info=False)
+    samples = [sample, cut_sample]
+    plot_distributions(samples, output_dir, sig_bins=200, bkg_bins=200, plot_var='M', sig_tag='top',
+                       file_name='bkg_suppr-'+'best'+'.png')
 
 
 def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
@@ -81,7 +86,7 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
     bins      = list(np.arange(min_loss, max_loss, bin_width)) + [max_loss]
     labels    = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
     if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     for n in set(y_true):
         hist_weights  = weights[y_true==n]
         hist_weights *= 100/np.sum(hist_weights)/bin_width
@@ -153,11 +158,11 @@ def mass_sculpting(y_true, X_losses, X_mass, weights, metrics_list, wp_metric, o
     processes = [mp.Process(target=mass_distances, args=arg) for arg in arguments]
     for job in processes: job.start()
     for job in processes: job.join()
-    plt.figure(figsize=(11,15));
+    plt.figure(figsize=(11,16));
     plt.subplot(2, 1, 1); make_plot('KSD', wp_metric)
     plt.subplot(2, 1, 2); make_plot('JSD', wp_metric)
     file_name = output_dir + '/' + 'mass_sculpting.png'
-    print('Saving mass sculpting     to:', file_name); plt.savefig(file_name)
+    print('Saving mass sculpting to:', file_name); plt.savefig(file_name)
 
 
 def signal_gain(sample, cut_sample, output_dir, n_bins=50, m_range=(0,200)):
@@ -172,13 +177,13 @@ def signal_gain(sample, cut_sample, output_dir, n_bins=50, m_range=(0,200)):
     mass, sig_cut_histo, bkg_cut_histo = get_histo(cut_sample)
     mass = (mass[:-1] + mass[1:])/2
     gain = bkg_histo*sig_cut_histo / (bkg_cut_histo*sig_histo)
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     plt.plot(mass, gain, label='gain', color='tab:blue', lw=2)
     file_name = output_dir + '/' + 'signal_gain.png'
     print('Saving signal gain to:', file_name); plt.savefig(file_name)
 
 
-def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_tag,
+def plot_distributions(samples, output_dir, plot_var, sig_bins, bkg_bins, sig_tag,
                        normalize=False, density=True, log=True, file_name=''):
     if sig_tag == 'W'  : tag = r'$W$'
     if sig_tag == 'top': tag = r'$t\bar{t}$'
@@ -186,12 +191,16 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_ta
         #labels = {0:[sig_tag,'QCD','All'], 1:[sig_tag+'$ (weighted)','QCD (weighted)','All (cut)']}
         labels = {0:[tag+' (X-S weighted)'       ,'QCD (X-S weighted)'       ,'All'],
                   1:[tag+' (flat $p_t$ weighted)','QCD (flat $p_t$ weighted)','All (cut)']}
-    if plot_var == 'M':
+        #labels = {0:[tag+' (UFO)'       ,'QCD (UFO)'       ,'All'],
+        #          1:[tag+' (topo)','QCD (topo)','All (cut)']}
+    if plot_var == 'M' or plot_var == 'rljet_n_constituents':
         labels = {0:[tag,'QCD','All'], 1:[tag+' (cut)','QCD (cut)','All (cut)']}
+        #labels = {0:[tag+' (match to QCD)','QCD','All'], 1:[tag+' (cut)','QCD (cut)','All (cut)']}
+        #labels = {0:[tag+' (UFO)','QCD (UFO)','All (UFO)'], 1:[tag+' (topo)','QCD (topo)','All (topo)']}
     colors = ['tab:orange', 'tab:blue', 'tab:brown']; alphas = [1, 0.5]
     n_bins = [sig_bins, bkg_bins, bkg_bins]
-    xlabel = {'pt':'$p_t$', 'M':'$M$'}[plot_var]
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    xlabel = {'pt':'$p_t$', 'M':'$M$', 'rljet_n_constituents':'Number of constituents'}[plot_var]
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     if not isinstance(samples, list):
         samples = [samples]
     for n in [0, 1]:
@@ -214,10 +223,12 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_ta
                 weights /= np.take(np.diff(bins), np.minimum(indices, len(bins)-1)-1)
             pylab.hist(variable, bins, histtype='step', weights=weights, color=colors[n],
                        lw=2, log=log, alpha=alphas[m], label=labels[m][n])
+            #pylab.hist(variable, bins=np.arange(250), histtype='step', weights=weights, color=colors[n],
+            #           lw=2, log=log, alpha=alphas[m], label=labels[m][n])
     if normalize:
         if log:
             #pylab.xlim(0, 2000); pylab.ylim(1e-5, 1e0)
-            pylab.xlim(0, 6000); pylab.ylim(1e-4, 1e-1)
+            pylab.xlim(0, 6000); pylab.ylim(1e-6, 1e1)
         else:
             pylab.xlim(0, 6000); pylab.ylim(0, 100)
             pylab.yticks(np.arange(0,0.025,0.005))
@@ -227,11 +238,12 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_ta
         #pylab.xlim(0, 2000); pylab.ylim(1e-5, 1e4)
         pylab.xlim(0, 6000); pylab.ylim(1e0, 1e7)
     if plot_var == 'M':
-        pylab.xlim(0, 400); pylab.ylim(1e0, 1e7)
+        pylab.xlim(0, 400); pylab.ylim(1e-1, 1e7)
+
+    #pylab.xlim(0, 250); pylab.ylim(1e0, 1e8)
+
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if not log: axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
-    axes.tick_params(axis='both', which='major', labelsize=14)
-    axes.tick_params(axis='both', which='major', labelsize=14)
     plt.xlabel(xlabel+' (GeV)', fontsize=24)
     y_label = (' density' if density else '')
     if normalize:
@@ -240,11 +252,26 @@ def plot_distributions(samples, output_dir, sig_bins, bkg_bins, plot_var, sig_ta
         #y_label += ' ('+r'36.2 fb$^{-1}$'+')'
         y_label += ' ('+r'58.5 fb$^{-1}$'+')'
     plt.ylabel('Distribution' + y_label, fontsize=24)
+
+    plt.xlabel(xlabel, fontsize=24)
+    plt.ylabel('Distribution', fontsize=24)
+
+    axes.tick_params(axis='both', which='major', labelsize=14)
     plt.legend(loc='upper right', ncol=1 if len(samples)==1 else 2, fontsize=18)
     if file_name == '':
         file_name = (plot_var if plot_var=='pt' else 'mass')+'_dist.png'
     file_name = output_dir+'/'+file_name
-    print('Saving', plot_var, 'distributions to:', file_name); plt.savefig(file_name)
+    print('Saving', format(plot_var, '2s'), 'distributions to:    ', file_name); plt.savefig(file_name)
+
+
+def combined_plots(n_test, n_top, output_dir, plot_var, n_dims=4, n_constituents=20):
+    sample_topo = make_sample(n_dims, n_constituents, 'qcd-topo', 'top-topo',
+                              n_test, n_top, bkg_cuts='', sig_cuts='', adjust_weights=True)
+    sample_UFO  = make_sample(n_dims, n_constituents, 'qcd-UFO', 'BSM',
+                              n_test, n_top, bkg_cuts='', sig_cuts='', adjust_weights=True)
+    samples = [sample_UFO, sample_topo]
+    plot_distributions(samples, output_dir, plot_var, sig_bins=200, bkg_bins=400, sig_tag='top')
+    sys.exit()
 
 
 def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
@@ -254,7 +281,7 @@ def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
     max_value = max(np.max(pt_true), np.max(pt_pred))
     bin_width = (max_value - min_value) / n_bins
     bins      = [min_value + k*bin_width for k in np.arange(n_bins+1)]
-    plt.figure(figsize=(12,8)); pylab.grid(True); axes = plt.gca()
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     labels = [r'$t\bar{t}$', 'QCD']; colors = ['tab:orange', 'tab:blue']
     for n in set(y_true):
         hist_weights  = weights[y_true==n]
@@ -282,27 +309,27 @@ def quantile_reconstruction(y_true, X_true, X_pred, sample, scaler, output_dir):
     #pt_reconstruction(sample['clusters'], X_pred, y_true, None, output_dir)
 
 
-def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, ROC_type='gain', wp=[1,10]):
+def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10]):
     colors_dict = {'MSE':'tab:green', 'MAE'   :'tab:brown' , 'X-S'   :'tab:purple',
                    'JSD':'tab:blue' , 'EMD'   :'tab:orange', 'KSD'   :'black'     ,
                    'KLD':'tab:red'  , 'Inputs':'gray'      , 'Latent':'tab:cyan'}
     metrics_dict = ROC_rates(y_true, X_losses, weights, metrics_list)
-    plt.figure(figsize=(11,15))
-    plt.subplot(2, 1, 1); pylab.grid(True); axes = plt.gca()
+    """ Background rejection plot """
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     for metric in metrics_list:
         fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
         len_0 = np.sum(fpr==0)
         plt.text(0.98, 0.65-4*metrics_list.index(metric)/100, 'AUC: '+format(metrics.auc(fpr,tpr), '.3f'),
-                 {'color':colors_dict[metric], 'fontsize':12}, va='center', ha='right', transform=axes.transAxes)
+                 {'color':colors_dict[metric], 'fontsize':14}, va='center', ha='right', transform=axes.transAxes)
         plt.plot(100*tpr[len_0:], 1/fpr[len_0:], label=metric, lw=2, color=colors_dict[metric])
     metrics_scores = [[metrics_dict[metric][key] for key in ['fpr','tpr']] for metric in metrics_list]
     scores     = [np.max([1/fpr[np.argwhere(100*tpr >= val)[0]] for fpr,tpr in metrics_scores]) for val in wp]
     scores_idx = [np.argmax([1/fpr[np.argwhere(100*tpr >= val)[0]] for fpr,tpr in metrics_scores]) for val in wp]
     for n in np.arange(len(wp)):
         color = colors_dict[metrics_list[scores_idx[n]]]
-        axes.axhline(scores[n], xmin=wp[n]/100, xmax=1, ls='--', linewidth=1., color='gray')
-        plt.text(100.4, scores[n], str(int(scores[n])), {'color':color, 'fontsize':12}, va="center", ha="left")
-        axes.axvline(wp[n], ymin=0, ymax=np.log(scores[n])/np.log(1e4), ls='--', linewidth=1., color='gray')
+        axes.axhline(scores[n], xmin=wp[n]/100, xmax=1, ls='--', linewidth=1., color='dimgray')
+        plt.text(100.4, scores[n], str(int(scores[n])), {'color':color, 'fontsize':14}, va="center", ha="left")
+        axes.axvline(wp[n], ymin=0, ymax=np.log(scores[n])/np.log(1e4), ls='--', linewidth=1., color='dimgray')
     pylab.xlim(0,100)
     pylab.ylim(1,1e3)
     plt.yscale('log')
@@ -310,25 +337,19 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, ROC_type='ga
     plt.yticks([10**int(n) for n in np.arange(0,5)], ['1','$10^1$','$10^2$','$10^3$','$10^4$'])
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('$1/\epsilon_{\operatorname{bkg}}$', fontsize=25)
-    axes.tick_params(axis='both', which='major', labelsize=12)
+    axes.tick_params(axis='both', which='major', labelsize=14)
     plt.legend(loc='upper right', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
-    plt.subplot(2, 1, 2); pylab.grid(True); axes = plt.gca()
+    file_name = output_dir + '/' + 'bkg_rej.png'
+    print('Saving bkg rejection  to:', file_name); plt.savefig(file_name)
+    """ Signal gain plot """
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     max_ROC_var = 0
     for metric in metrics_list:
         fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
         len_0    = np.sum(fpr==0)
-        if ROC_type == 'gain':
-            ROC_var = tpr[len_0:]/fpr[len_0:]
-        if ROC_type == 'sigma':
-            n_sig = np.sum(weights[y_true==0])
-            n_bkg = np.sum(weights[y_true==1])
-            ROC_var = n_sig*tpr[len_0:]/np.sqrt(n_bkg*fpr[len_0:])
+        ROC_var = tpr[len_0:]/fpr[len_0:]
         max_ROC_var = max(max_ROC_var, np.max(ROC_var[100*tpr[len_0:]>=1]))
         plt.plot(100*tpr[len_0:], ROC_var, label=metric, lw=2, color=colors_dict[metric])
-    if ROC_type == 'sigma':
-        val = ROC_var[-1]
-        axes.axhline(val, xmin=0, xmax=1, ls='--', linewidth=1., color='gray')
-        plt.text(100.4, val, format(val,'.1f'), {'color':'gray', 'fontsize':12}, va="center", ha="left")
     pylab.xlim(1,100)
     pylab.ylim(0,np.ceil(max_ROC_var))
     plt.xscale('log')
@@ -336,15 +357,38 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, ROC_type='ga
     axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
     location = 'upper right'
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
-    if ROC_type == 'gain':
-        plt.ylabel('$G_{S/B}=\epsilon_{\operatorname{sig}}/\epsilon_{\operatorname{bkg}}$', fontsize=25)
-    if ROC_type == 'sigma':
-        plt.ylabel('$\sigma=n_{\operatorname{sig}}\epsilon_{\operatorname{sig}}$/'
-                   +'$\sqrt{n_{\operatorname{bkg}}\epsilon_{\operatorname{bkg}}}$', fontsize=25)
-    axes.tick_params(axis='both', which='major', labelsize=12)
+    plt.ylabel('$G_{S/B}=\epsilon_{\operatorname{sig}}/\epsilon_{\operatorname{bkg}}$', fontsize=25)
+    axes.tick_params(axis='both', which='major', labelsize=14)
     plt.legend(loc='upper left', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
-    file_name = output_dir + '/' + 'ROC_' + ROC_type + '.png'
-    print('Saving', format(ROC_type,'5s'), 'ROC curves   to:', file_name); plt.savefig(file_name)
+    file_name = output_dir + '/' + 'signal_gain.png'
+    print('Saving signal gain    to:', file_name); plt.savefig(file_name)
+    """ Significance plot """
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
+    max_ROC_var = 0
+    for metric in metrics_list:
+        fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
+        len_0    = np.sum(fpr==0)
+        n_sig = np.sum(weights[y_true==0])
+        n_bkg = np.sum(weights[y_true==1])
+        ROC_var = n_sig*tpr[len_0:]/np.sqrt(n_bkg*fpr[len_0:])
+        max_ROC_var = max(max_ROC_var, np.max(ROC_var[100*tpr[len_0:]>=1]))
+        plt.plot(100*tpr[len_0:], ROC_var, label=metric, lw=2, color=colors_dict[metric])
+    val = ROC_var[-1]
+    #axes.axhline(val, xmin=0, xmax=1, ls='--', linewidth=1., color='dimgray')
+    plt.text(100.4, val, format(val,'.1f'), {'color':'dimgray', 'fontsize':14}, va="center", ha="left")
+    pylab.xlim(1,100)
+    pylab.ylim(0,np.ceil(max_ROC_var))
+    plt.xscale('log')
+    plt.xticks([1,10,100], ['1','10', '100'])
+    axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+    location = 'upper right'
+    plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
+    plt.ylabel('$\sigma=n_{\operatorname{sig}}\epsilon_{\operatorname{sig}}$/'
+               +'$\sqrt{n_{\operatorname{bkg}}\epsilon_{\operatorname{bkg}}}$', fontsize=25)
+    axes.tick_params(axis='both', which='major', labelsize=14)
+    plt.legend(loc='upper left', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
+    file_name = output_dir + '/' + 'significance.png'
+    print('Saving significance   to:', file_name); plt.savefig(file_name)
 
 
 def get_rates(y_true, X_losses, weights, metric, return_dict):
