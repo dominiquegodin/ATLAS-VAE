@@ -3,7 +3,7 @@
 #---------------------------------------------------------------------
 # SLURM OPTIONS (LPS or BELUGA)
 #---------------------------------------------------------------------
-#SBATCH --time=01-00:00         #time limit (DD-HH:MM)
+#SBATCH --time=00-08:00         #time limit (DD-HH:MM)
 #SBATCH --mem=256G              #memory per node
 #SBATCH --job-name=root2h5
 #SBATCH --output=%x_%A_%a.out

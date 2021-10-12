@@ -10,22 +10,12 @@ source setup.sh
 
 # BACKGROUND SAMPLES
 # COMMAND LINE: sbatch -w atlas16 --array=0-9%1 sbatch.sh
-sample_type=UFO-dijet #topo-dijet
-
+sample_type=UFO-dijet
+#sample_type=topo-dijet
 if [ $sample_type == UFO-dijet ] && ([ $SBATCH_VAR -eq 1 ] || [ $SBATCH_VAR -eq 2 ])
-then
-    library=ak
-else
-    library=np
-fi
-
+then library=np; else library=np; fi
 if [ $SBATCH_VAR -le 9 ]
-then
-    python root2h5.py --sample_type=$sample_type --library=$library --tag $SBATCH_VAR
-fi
-
+then python root2h5.py --sample_type=$sample_type --library=$library --tag $SBATCH_VAR; fi
 if [ $SBATCH_VAR -ge 9 ]
-then
-    python root2h5.py --merging=ON
-fi
+then python root2h5.py --sample_type=$sample_type --merging=ON; fi
 

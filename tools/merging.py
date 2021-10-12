@@ -5,9 +5,12 @@ from   sklearn import utils
 from   root_utils import get_idx
 
 
-def file_processing(data_path, n_constituents, n_files=40, n_tasks=10):
+def file_processing(data_path, n_constituents='unknown', n_files=40, n_tasks=10):
     data_files = sorted([h5_file for h5_file in os.listdir(data_path) if '.h5' in h5_file])
-    n_jets     = [len(h5py.File(data_path+'/'+h5_file,'r')['constituents']) for h5_file in data_files]
+    shapes = [h5py.File(data_path+'/'+h5_file,'r')['constituents'].shape for h5_file in data_files]
+    n_jets, max_components = zip(*shapes)
+    if n_constituents == 'unknown':
+        n_constituents = max(max_components)//4
     idx_list   = [get_idx(jet, n_sets=n_files) for jet in n_jets]
     file_idx   = list(utils.shuffle(np.arange(n_files), random_state=0))
     merge_path = data_path+'/'+'merging'; os.mkdir(merge_path)
@@ -57,7 +60,7 @@ def merge_files(data_path):
     output_file = data_path.split('/')[-2]+'.h5'
     os.rename(data_path+'/'+h5_files[0], data_path+'/'+output_file)
     data = h5py.File(data_path+'/'+output_file, 'a')
-    print('MERGING DATA FILES IN:', end=' '); print('output/'+output_file, end=' .', flush=True)
+    print('MERGING DATA FILES IN:', end=' '); print(output_file, end=' .', flush=True)
     start_time = time.time()
     for key in data: data[key].resize((idx[-1],) + data[key].shape[1:])
     for h5_file in h5_files[1:]:

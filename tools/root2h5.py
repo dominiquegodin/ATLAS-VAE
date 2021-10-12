@@ -1,5 +1,5 @@
 # IMPORT PACKAGES AND FUNCTIONS
-import numpy as np, os, sys, h5py, uproot
+import numpy as np, os, sys, h5py
 from sklearn    import utils
 from argparse   import ArgumentParser
 from root_utils import get_files, get_data, final_jets, count_constituents
@@ -8,11 +8,12 @@ from merging    import file_processing
 
 # PROGRAM ARGUMENTS
 parser = ArgumentParser()
-parser.add_argument( '--tag', '--names-list', nargs='+', default = [0]          )
-parser.add_argument( '--sample_type'                   , default = 'topo-dijet' )
-parser.add_argument( '--merging'                       , default = 'OFF'        )
-parser.add_argument( '--library'                       , default = 'np'         ) #('np':fast, 'ak':slow)
-args = parser.parse_args()
+parser.add_argument( '--sample_type'                   , default = 'topo-dijet')
+parser.add_argument( '--n_constituents'                , default = 'unknown'   )
+parser.add_argument( '--merging'                       , default = 'OFF'       )
+parser.add_argument( '--library'                       , default = 'np'        ) #('np':fast, 'ak':slow)
+parser.add_argument( '--tag', '--names-list', nargs='+', default = [0]         )
+args = parser.parse_args(); print(args)
 
 
 # INPUT/OUTPUT PATHS
@@ -51,7 +52,6 @@ if args.sample_type == 'topo-dijet':
                 1.0166E-02, 1.2077E-02, 5.9083E-03, 2.6734E-03, 4.2592E-04,]
     Nevents  = [15362751  , 15925231  , 15993500  , 17834000  , 15983000   ,
                 15999000  , 13915500  , 13985000  , 15948000  , 15995600   ]
-    n_constituents = 100
 if args.sample_type == 'UFO-dijet':
     """ DIJET simulation (for JZ3, JZ4, JZ5, etc.) """
     DSIDs    = ['364703', '364704', '364705', '364706', '364707',
@@ -62,7 +62,6 @@ if args.sample_type == 'UFO-dijet':
                 1.0156E-02, 1.2056E-02, 5.8933E-03, 2.6730E-03, 4.2889E-04]
     Nevents  = [258.536   , 8.67297    , 0.345287   , 0.0389311  , 0.00535663,
                 0.00154999, 0.000271431, 3.20958e-05, 2.10202e-06, 9.86921e-06]
-    n_constituents = 377
 if args.sample_type == 'topo-ttbar':
     DSIDs       = ['410284', '410285', '410286', '410287', '410288']
     crossSec    = [7.2978E+05, 7.2976E+05, 7.2978E+05, 7.2975E+05, 7.2975E+05] #in fb
@@ -101,28 +100,28 @@ if args.sample_type in ['topo-dijet', 'UFO-dijet']:
     ID_list      = [ DSIDs[int(args.tag[0])] ]
     output_file  = args.sample_type + '_' + ID_list[0]+'.h5'
     output_path += '/' + args.sample_type
+    # MERGING AND MIXING DATA FILES
+    if args.merging == 'ON': file_processing(output_path, args.n_constituents)
 if args.sample_type in ['topo-ttbar', 'UFO-ttbar', 'BSM']:
     ID_list      = DSIDs
     output_file  = args.sample_type+'.h5'
 
 
-# INPUT DATA PATHS
-data_paths = sorted([path for path in os.listdir(input_path) if path.split('.')[2] in ID_weights])
+# INPUT DATA FILES
+data_paths = sorted([path for path in os.listdir(input_path) if path.split('.')[2] in ID_list])
 root_files = get_files(input_path, data_paths)
-root_list  = np.concatenate([root_files[n] for n in ID_list])
-if 'n_constituents' not in locals(): n_constituents = count_constituents(root_files)
-
-
-# MERGING AND MIXING DATA FILES
-if args.merging == 'ON': file_processing(output_path, n_constituents)
 
 
 # READING AND PROCESSING ROOT DATA
-var_list  = scalars + jet_var + others
-root_data = get_data(root_list, var_list, jet_var, n_constituents, args.sample_type, ID_weights, args.library)
+var_list = scalars + jet_var + others
+if args.n_constituents == 'unknown':
+    args.n_constituents = count_constituents(root_files)
+root_data = get_data(root_files, var_list, jet_var, args.n_constituents,
+                     args.sample_type, ID_weights, args.library)
 if np.all([n in var_list for n in jet_var]):
     root_data.update(final_jets({key:root_data.pop(key) for key in jet_var}))
 root_data['weights'] = luminosity * root_data.pop('weight_mc') * root_data.pop('weight_pileup')
+#for key in root_data: root_data[split('rljet_')[-1]] = root_data.pop(key)
 #for key in root_data: print(format(key,'28s'), root_data[key].shape, root_data[key].dtype)
 
 
