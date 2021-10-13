@@ -53,7 +53,7 @@ def make_sample(n_dims, n_constituents, bkg, sig, bkg_idx, sig_idx,
 def load_data(data_file, tag, idx, n_constituents, adjust_weights, cuts, dsids=None):
     print('Loading', format(tag,'^3s'), 'sample', end=' ', flush=True)
     data     = h5py.File(data_file,"r"); start_time = time.time()
-    var_list = ['pt','M','weights','JZW','rljet_m_comb','rljet_n_constituents','DSID']
+    var_list = ['pt_calo','m_calo','rljet_m_comb','weights','JZW','rljet_n_constituents','DSID']
     sample   = {key:data[key][idx[0]:idx[1]] for key in set(var_list)&set(data) if key!='constituents'}
     sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_constituents])
     if 4*n_constituents > data['constituents'].shape[1]:
@@ -62,6 +62,8 @@ def load_data(data_file, tag, idx, n_constituents, adjust_weights, cuts, dsids=N
         sample['constituents'] = np.hstack([sample['constituents'], zeros_array])
     if len(set(sample) & {'pt','M'}) == 0:
         sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
+    sample['M']  = sample.pop('m_calo')
+    sample['pt'] = sample.pop('pt_calo')
     if 'rljet_m_comb' in sample:
         sample['m_comb'] = sample.pop('rljet_m_comb')
     if 'JZW' not in sample:
@@ -176,10 +178,9 @@ def get_4v(sample, idx=(0,None), return_dict=None):
     E, px, py, pz = [sample[:,n] for n in np.arange(sample.shape[-1])]
     pt = np.sqrt(px**2 + py**2)
     M  = np.sqrt(np.maximum(0, E**2 - px**2 - py**2 - pz**2))
-    #calo_dict = {'E':E, 'pt_calo':pt, 'm_calo':M}
-    calo_dict = {'E':E, 'pt':pt, 'M':M}
-    if idx == (0,None): return calo_dict
-    else: return_dict[idx]  =  calo_dict
+    output_dict = {'E':E, 'pt_calo':pt, 'm_calo':M}
+    if idx == (0,None): return output_dict
+    else: return_dict[idx]  =  output_dict
 
 
 def JSD(P, Q, idx, n_dims, return_dict, reshape=False):

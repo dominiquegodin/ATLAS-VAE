@@ -13,7 +13,7 @@ source setup.sh
 sample_type=UFO-dijet
 #sample_type=topo-dijet
 if [ $sample_type == UFO-dijet ] && ([ $SBATCH_VAR -eq 1 ] || [ $SBATCH_VAR -eq 2 ])
-then library=np; else library=np; fi
+then library=ak; else library=np; fi
 if [ $SBATCH_VAR -le 9 ]
 then python root2h5.py --sample_type=$sample_type --library=$library --tag $SBATCH_VAR; fi
 if [ $SBATCH_VAR -ge 9 ]

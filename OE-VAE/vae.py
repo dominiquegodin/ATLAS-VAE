@@ -48,18 +48,17 @@ for key in ['n_train', 'n_valid', 'n_test', 'n_W', 'n_top', 'batch_size']:
 
 '''
 import h5py
-data_path = '/lcg/storage19/atlas/nguyenn/AD_data_UFO'
-#data_path = '/opt/tmp/godin/AD_data'
+data_path = '/opt/tmp/godin/AD_data'
 #file_name = 'Atlas_topo-dijet.h5'
 #file_name = 'Atlas_topo-ttbar.h5'
 #file_name = 'Atlas_UFO-dijet.h5'
-#file_name = 'Atlas_UFO-ttbar.h5'
-file_name = 'Atlas_BSM.h5'
+file_name = 'Atlas_UFO-ttbar.h5'
+#file_name = 'Atlas_BSM.h5'
 data      = h5py.File(data_path+'/'+file_name,"r")
 for key in data: print( key, data[key].shape, data[key].dtype )
 print( np.sum(data['weights']) )
 #print( np.min(data['JZW']), np.max(data['JZW']) )
-print(data['DSID'][:] )
+#print(data['DSID'][:] )
 sys.exit()
 '''
 
@@ -143,7 +142,7 @@ if args.n_epochs > 0:
 # MODEL PREDICTIONS ON VALIDATION DATA
 print('\n+'+30*'-'+'+\n+--- TEST SAMPLE EVALUATION ---+\n+'+30*'-'+'+')
 #dsids = ['302321', '302326', '302331']
-sample = make_sample(args.n_dims, args.n_constituents, 'qcd-UFO', 'top-UFO', args.n_test, args.n_top,
+sample = make_sample(args.n_dims, args.n_constituents, 'qcd-UFO', 'BSM', args.n_test, args.n_top,
                      bkg_cuts, sig_cuts, dsids=None, adjust_weights=True)
 sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
 y_true = np.where(sample['JZW']==-1, 0, 1)
