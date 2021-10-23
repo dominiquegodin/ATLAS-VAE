@@ -47,7 +47,7 @@ def root_conversion(jet_var, n_constituents, sample_type, ID_weights, library, r
     else:
         if library == 'ak': arrays = ak.to_numpy(arrays)
         arrays = np.reshape(arrays, (len(arrays),))
-        if key in ['rljet_pt_calo','rljet_pt_comb']: arrays = arrays/1000
+        if key in ['rljet_m_calo', 'rljet_m_comb', 'rljet_pt_calo', 'rljet_pt_comb']: arrays = arrays/1000
         if key == 'weight_mc': arrays *= ID_weights[DSID]
     return root_tuple, arrays
 
@@ -55,8 +55,7 @@ def root_conversion(jet_var, n_constituents, sample_type, ID_weights, library, r
 def final_jets(jets, n_tasks=32):
     start_time = time.time()
     jets = np.concatenate([jets[key][...,np.newaxis] for key in jets          ], axis=2)
-    #jets = np.concatenate([jets, np.zeros_like(jets[...,:1], dtype=np.float32)], axis=2)
-    jets = np.concatenate([jets, np.zeros_like(jets[...,:1], dtype=np.float16)], axis=2)
+    jets = np.concatenate([jets, np.zeros_like(jets[...,:1], dtype=np.float32)], axis=2)
     manager    = mp.Manager(); return_dict = manager.dict()
     idx_tuples = get_idx(len(jets), n_sets=min(mp.cpu_count(), n_tasks))
     arguments  = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
@@ -84,13 +83,11 @@ def transform_jets(jets, idx, return_dict):
 
 
 def get_4v(sample):
-    sample = np.sum(np.float32(sample), axis=1)
-    #sample = np.sum(sample, axis=1)
+    sample = np.sum(sample, axis=1)
     E, px, py, pz = [sample[:,n] for n in np.arange(sample.shape[-1])]
     pt = np.sqrt(px**2 + py**2)
     M  = np.sqrt(np.maximum(0, E**2 - px**2 - py**2 - pz**2))
     return {'E':E, 'pt_calo':pt, 'm_calo':M}
-    #return {'E':E, 'pt':pt, 'M':M}
 
 
 def jet_pt_ordering(jet):
@@ -101,7 +98,6 @@ def jet_pt_ordering(jet):
 
 def jet_Lorentz_4v(jet):
     for n in np.arange(len(jet)):
-        #if jet[n,0] != 0:
         if np.sum(jet[n,:]) != 0:
             v = TLorentzVector(0, 0, 0, 0)
             v.SetPtEtaPhiM(jet[n,0], jet[n,1], jet[n,2], jet[n,3])
@@ -118,7 +114,6 @@ def jet_processing(jet):
     bv = v_jet.BoostVector()
     bv.SetPerp(0)
     for n in np.arange(len(jet)):
-        #if jet[n,0] != 0:
         if np.sum(jet[n,:]) != 0:
             v = TLorentzVector(jet[n,1], jet[n,2], jet[n,3], jet[n,0])
             v.RotateZ(-phi)
@@ -128,7 +123,6 @@ def jet_processing(jet):
     weighted_phi=0
     weighted_eta=0
     for n in np.arange(len(jet)):
-        #if jet[n,0] != 0:
         if np.sum(jet[n,:]) != 0:
             v = TLorentzVector(jet[n,1], jet[n,2], jet[n,3], jet[n,0])
             r = np.sqrt(v.Phi()**2 + v.Eta()**2)
@@ -138,7 +132,6 @@ def jet_processing(jet):
     #alpha = np.arctan2(weighted_phi, weighted_eta) #approximately align at eta
     alpha = np.arctan2(weighted_eta, weighted_phi) #approximately align at phi
     for n in np.arange(len(jet)):
-        #if jet[n,0] != 0:
         if np.sum(jet[n,:]) != 0:
             v = TLorentzVector(jet[n,1], jet[n,2], jet[n,3], jet[n,0])
             #v.rotate_x(alpha) #approximately align at eta
