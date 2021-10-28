@@ -60,12 +60,11 @@ def load_data(data_file, tag, idx, n_constituents, adjust_weights, cuts, dsids=N
         shape = sample['constituents'].shape
         zeros_array = np.zeros((shape[0], 4*n_constituents-shape[1]), dtype=np.float32)
         sample['constituents'] = np.hstack([sample['constituents'], zeros_array])
-    if len(set(sample) & {'pt','M'}) == 0:
+    if len(set(sample) & {'pt_calo','m_calo'}) == 0:
         sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
-    sample['M']  = sample.pop('m_calo')
     sample['pt'] = sample.pop('pt_calo')
-    if 'rljet_m_comb' in sample:
-        sample['m_comb'] = sample.pop('rljet_m_comb')
+    sample['M'] = sample.pop('m_calo')
+    #sample['M']  = sample.pop('rljet_m_comb') if 'rljet_m_comb' in sample else sample.pop('m_calo')
     if 'JZW' not in sample:
         sample['JZW'] = np.full(len(sample['constituents']), 0 if tag=='qcd' else -1, dtype=np.float32)
     if 'DSID' not in sample:
@@ -156,7 +155,7 @@ def weights_factors(JZW, data_file):
         # old samples JZWs
         #n_JZW = [ 35596, 13406964, 15909276, 17831457, 15981239, 15997303, 13913843, 13983297, 15946135, 15993849]
         # UFO samples JZWs
-        #n_JZW = [181406, 27395322, 20376000, 13928294,  6964549,  6959061,  3143354,   796201,    98674,   796311]
+        #n_JZW = [181406, 27395322, 20376000, 13928294,  6964549,  6959061,  3143354,   796201,   796171,   796311]
         factors = np.ones_like(JZW, dtype=np.float32)
         for n in np.arange(len(n_JZW)):
             if np.sum(JZW==n) != 0: factors[JZW==n] = n_JZW[n]/np.sum(JZW==n)
@@ -168,8 +167,6 @@ def jets_4v(sample):
     processes  = [mp.Process(target=get_4v, args=(sample, idx, return_dict)) for idx in idx_tuples]
     for task in processes: task.start()
     for task in processes: task.join()
-    #return {key:np.concatenate([return_dict[idx][key] for idx in idx_tuples])
-    #        for key in return_dict[idx_tuples[0]]}
     return {key:np.concatenate([return_dict[idx].pop(key) for idx in idx_tuples])
             for key in return_dict[idx_tuples[0]]}
 def get_4v(sample, idx=(0,None), return_dict=None):
@@ -315,7 +312,7 @@ def apply_best_cut(y_true, X_true, X_pred, sample, n_dims, model, metric, cut_ty
     return sample
 
 
-def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[120,200], bins=50,
+def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,250], bins=50,
                 make_histo=True, print_info=True):
     #import pyBumpHunter as BH; sys.path.append('../')
     #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
@@ -330,10 +327,10 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[120,200], bins=
     #hunter = BH.BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
     #                         npe=10000, nworker=1, seed=0, bins=bin_edges)
     hunter = BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
-                          npe=10000, nworker=1, seed=0, bins=bin_edges)
+                          npe=1000, nworker=1, seed=0, bins=bin_edges)
     hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=make_histo and print_info)
     filename = None if output_dir==None else output_dir+'/'+'bump_hunt-'+cut_type+'.png'
-    if make_histo: print('Saving bump hunting plot to:   ', filename)
+    if make_histo: print('Saving bump hunting plot to:', filename)
     max_sig = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
     if make_histo and print_info:
         hunter.print_bump_info()

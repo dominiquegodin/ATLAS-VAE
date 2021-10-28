@@ -7,11 +7,12 @@ from abc import ABCMeta, abstractmethod
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import gridspec as grd
-from scipy.special import gammainc as G  # Need G(a,b) for the gamma function
+from scipy.special import gammainc, gammaincc  # Need G(a,b) for the gamma function
 from scipy.stats import norm
-
 from .util import deprecated, deprecated_arg
 
+import warnings, mpmath, sys
+mpmath.mp.dps=300
 
 class BumpHunter1D:
     """The BumpHunter class is the object providing all the necessary tools to "bump hunt" with ease.
@@ -254,7 +255,7 @@ class BumpHunter1D:
                 Same as npe. This argument is deprecated and will be removed in future versions.
 
             Nworker : *Deprecated*
-                Same as Nworker. This argument is deprecated and will be removed in future versions.
+                Same as nworker. This argument is deprecated and will be removed in future versions.
 
             useSideBand : *Deprecated*
                 Same as useSideBand. This argument is deprecated and will be removed in future versions.
@@ -330,7 +331,7 @@ class BumpHunter1D:
         """
 
         # Remove the first/last hist bins if empty ... just to be consistant with c++
-        non0 = [iii for iii in range(hist.size) if hist[iii] > 0]
+        non0 = [iii for iii in range(hist.size) if ref[iii] > 0]
         Hinf, Hsup = min(non0), max(non0) + 1
 
         # Create the results array
@@ -377,12 +378,12 @@ class BumpHunter1D:
 
             # Calculate all local p-values for for width w
             if self.mode == "excess":
-                res[i][(Nhist > Nref) & (Nref > 0)] = G(
+                res[i][(Nhist > Nref) & (Nref > 0)] = gammainc(
                     Nhist[(Nhist > Nref) & (Nref > 0)],
                     Nref[(Nhist > Nref) & (Nref > 0)],
                 )
             elif self.mode == "deficit":
-                res[i][Nhist < Nref] = 1.0 - G(
+                res[i][Nhist < Nref] = 1.0 - gammainc(
                     Nhist[Nhist < Nref] + 1, Nref[Nhist < Nref]
                 )
 
@@ -394,7 +395,7 @@ class BumpHunter1D:
             # Get the minimum p-value and associated position for width w
             min_Pval[i] = res[i].min()
             min_loc[i] = pos[res[i].argmin()]
-            signal_eval[i] = Nhist[min_loc[i]] - Nref[min_loc[i]]
+            signal_eval[i] = Nhist[res[i].argmin()] - Nref[res[i].argmin()]
 
         # Get the minimum p-value and associated window among all width
         min_width = w_ar[min_Pval.argmin()]
@@ -407,7 +408,8 @@ class BumpHunter1D:
         min_Pval = min_Pval.min()
 
         # Save the results in inner variables and return
-        self.res_ar[ih] = res
+        if ih == 0:
+            self.res_ar = res
         self.min_Pval_ar[ih] = min_Pval
         self.min_loc_ar[ih] = int(min_loc)
         self.min_width_ar[ih] = int(min_width)
@@ -678,7 +680,7 @@ class BumpHunter1D:
         if verbose:
             print("Generating histograms")
         if not is_hist:
-            bkg_hist, Hbin = np.histogram(
+            bkg_hist, _ = np.histogram(
                 bkg, bins=self.bins, weights=self.weights, range=self.rang
             )
             data_hist = np.histogram(data, bins=self.bins, range=self.rang)[0]
@@ -688,7 +690,6 @@ class BumpHunter1D:
             else:
                 bkg_hist = bkg * self.weights
             data_hist = data
-            Hbins = self.bins
 
         # Generate all the pseudo-data histograms
         if do_pseudo:
@@ -706,13 +707,14 @@ class BumpHunter1D:
             self.min_Pval_ar = np.empty(self.npe + 1)
             self.min_loc_ar = np.empty(self.npe + 1, dtype=int)
             self.min_width_ar = np.empty(self.npe + 1, dtype=int)
-            self.res_ar = np.empty(self.npe + 1, dtype=object)
+            self.t_ar = np.empty(self.npe + 1)
         else:
-            if self.res_ar == []:
+            if self.min_Pval_ar == []:
                 self.min_Pval_ar = np.empty(1)
                 self.min_loc_ar = np.empty(1, dtype=int)
                 self.min_width_ar = np.empty(1, dtype=int)
-                self.res_ar = np.empty(1, dtype=object)
+                self.t_ar = np.empty(1)
+        self.res_ar = []
 
         # Auto-adjust the value of width_max and do an array of all width
         w_ar = np.arange(self.width_min, self.width_max + 1, self.width_step)
@@ -727,8 +729,7 @@ class BumpHunter1D:
         if do_pseudo:
             if self.nworker > 1:
                 with thd.ThreadPoolExecutor(max_workers=self.nworker) as exe:
-                    #for th in range(self.nnpe + 1):
-                    for th in range(self.npe + 1):# DG
+                    for th in range(self.npe + 1):
                         if th == 0:
                             exe.submit(self._scan_hist, data_hist, bkg_hist, w_ar, th)
                         else:
@@ -749,24 +750,35 @@ class BumpHunter1D:
             self._scan_hist(data_hist, bkg_hist, w_ar, 0)
 
         # Use the p-value results to compute t
-        self.t_ar = -np.log(self.min_Pval_ar)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            self.t_ar = -np.log(self.min_Pval_ar)
 
         # Compute the global p-value from the t distribution
-        tdat = self.t_ar[0]
-        S = self.t_ar[1:][self.t_ar[1:] > tdat].size
-        self.global_Pval = S / self.npe
-        if verbose:
-            print(f"Global p-value : {self.global_Pval:1.4f}  ({S} / {self.npe})")
-
-        # If global p-value is exactly 0, we might have trouble with the significance
-        if self.global_Pval < 1e-15:
-            self.significance = norm.ppf(1 - 1e-15)
+        if self.t_ar.size > 1:
+            tdat = self.t_ar[0]
+            S = self.t_ar[1:][self.t_ar[1:] >= tdat].size
+            self.global_Pval = S / self.npe
+            if verbose:
+                print(f"Global p-value : {self.global_Pval:1.4f}  ({S} / {self.npe})")
+            # If global p-value is exactly 0, we might have trouble with the significance
+            #if self.global_Pval < 1e-15:
+            #    self.significance = norm.ppf(1 - 1e-15)
+            #elif self.global_Pval == 1:
+            #    self.significance = 0
+            #else:
+            #    self.significance = norm.ppf(1 - self.global_Pval)
+            if self.global_Pval == 1:
+                self.significance = 0
+            else:
+                self.significance = -norm.ppf(self.global_Pval) #DG
+            if verbose:
+                print(f"Significance = {self.significance:1.5f}")
+                print("")
         else:
-            self.significance = norm.ppf(1 - self.global_Pval)
-        if verbose:
-            print(f"Significance = {self.significance:1.5f}")
-            print("")
-
+            if verbose:
+                print("No pseudo data found : can't compute global p-value")
+                print("")
         return
 
     @deprecated("Use `bump_scan` instead.")
@@ -987,20 +999,24 @@ class BumpHunter1D:
             )
 
             # If global p-value is exactly 0, we might have trouble with the significance
-            if self.global_Pval < 1e-15:
-                self.significance = norm.ppf(1 - 1e-15)
-            else:
-                self.significance = norm.ppf(1 - self.global_Pval)
+            #if self.global_Pval < 1e-15:
+            #    self.significance = norm.ppf(1 - 1e-15)
+            #else:
+            #    self.significance = norm.ppf(1 - self.global_Pval)
+            self.significance = -norm.ppf(self.global_Pval) #DG
 
-            if global_inf < 1e-15:
-                sigma_inf = norm.ppf(1 - 1e-15)
-            else:
-                sigma_inf = norm.ppf(1 - global_inf)
+            #if global_inf < 1e-15:
+            #    sigma_inf = norm.ppf(1 - 1e-15)
+            #else:
+            #    sigma_inf = norm.ppf(1 - global_inf)
+            sigma_inf = -norm.ppf(global_inf) #DG
 
-            if global_sup < 1e-15:
-                sigma_sup = norm.ppf(1 - 1e-15)
-            else:
-                sigma_sup = norm.ppf(1 - global_sup)
+            #if global_sup < 1e-15:
+            #    sigma_sup = norm.ppf(1 - 1e-15)
+            #else:
+            #    sigma_sup = norm.ppf(1 - global_sup)
+            sigma_sup = -norm.ppf(global_sup) #DG
+
             print(
                 f"Significance = {self.significance:1.5f} ({sigma_inf:1.5f}  {sigma_sup:1.5f})"
             )
@@ -1045,48 +1061,60 @@ class BumpHunter1D:
     ## Display methods
 
     # Method that do the tomography plot for the data
-    def plot_tomography(self, data, is_hist: bool=False, filename=None):
+    def plot_tomography(self, bkg, is_hist: bool=False, filename=None):
         """
         Function that do a tomography plot showing the local p-value for every positions and widths of the scan
         window.
 
         Arguments :
-            data : Numpy array containing the data.
+            bkg :
+                Numpy array containing the reference background.
 
-            is_hist : Boolean specifying if data is in histogram form or not. Default to False.
+            is_hist :
+                Boolean specifying if data is in histogram form or not. Default to False.
 
             filename : Name of the file in which the plot will be saved. If None, the plot will be just shown
                        but not saved. Default to None.
         """
 
+        # Check if there is anything to show.
+        if self.res_ar == []:
+            print('Nothing to plot here !')
+            return
+
+        # Get the reference histogram
+        if not is_hist:
+            Hbkg, H = np.histogram(
+                bkg, bins=self.bins, range=self.rang, weights=self.weights
+            )
+        else:
+            if self.weights is None:
+                Hbkg = bkg
+            else:
+                Hbkg = bkg * self.weights
+
         # Same c++ compatibility thing
-        non0 = [i for i in range(data.size) if data[i] > 0]
+        non0 = [i for i in range(Hbkg.size) if Hbkg[i] > 0]
         Hinf = min(non0)
 
-        # Get real bin bounds
-        if not is_hist:
-            H = np.histogram(data, bins=self.bins, range=self.rang)[1]
-        else:
-            H = self.bins
+        # Get all width in number of bins
+        w_ar = np.arange(self.width_min, self.width_max + 1, self.width_step)
 
-        res_data = self.res_ar[0]
+        res_data = self.res_ar
         inter = []
         for i in range(res_data.size):
-            w = (H[1] - H[0]) * (
-                self.width_min + i * self.width_step
-            )  # bin_width * Nbins
-
             # Get scan step for width w
             if self.scan_step == "half":
-                scan_stepp = max(1, (self.width_min + i * self.width_step) // 2)
+                scan_stepp = max(1, w_ar[i] // 2)
             elif self.scan_step == "full":
-                scan_stepp = self.width_min + i * self.width_step
+                scan_stepp = w_ar[i]
             else:
                 scan_stepp = self.scan_step
 
+            # Loop over positions
             for j in range(len(res_data[i])):
                 loc = H[j * scan_stepp + Hinf]
-                inter.append([res_data[i][j], loc, w])
+                inter.append([res_data[i][j], loc, w_ar[i]])
 
         F = plt.figure(figsize=(12, 8))
         [plt.plot([i[1], i[1] + i[2]], [i[0], i[0]], "r") for i in inter if i[0] < 1.0]
@@ -1185,11 +1213,14 @@ class BumpHunter1D:
 
         # Calculate significance for each bin
         sig = np.ones(Hbkg.size)
-        sig[(H[0] > Hbkg) & (Hbkg > 0)] = G(
-            H[0][(H[0] > Hbkg) & (Hbkg > 0)], Hbkg[(H[0] > Hbkg) & (Hbkg > 0)]
-        )
-        sig[H[0] < Hbkg] = 1 - G(H[0][H[0] < Hbkg] + 1, Hbkg[H[0] < Hbkg])
-        sig = norm.ppf(1 - sig)
+        #sig[(H[0] > Hbkg) & (Hbkg > 0)] = gammainc(H[0][(H[0] > Hbkg) & (Hbkg > 0)],Hbkg[(H[0] > Hbkg) & (Hbkg > 0)])
+        #sig[H[0] < Hbkg] = gammaincc(H[0][H[0] < Hbkg] + 1, Hbkg[H[0] < Hbkg]) #DG
+        z, b = H[0][(H[0]>Hbkg) & (Hbkg>0)], Hbkg[(H[0]>Hbkg) & (Hbkg>0)] #DG
+        sig[(H[0]>Hbkg) & (Hbkg>0)] = [mpmath.gammainc(z[n],0,b[n], regularized=True) for n in range(len(z))] #DG
+        z, a = H[0][H[0]<Hbkg]+1, Hbkg[H[0]<Hbkg] #DG
+        sig[H[0]<Hbkg] = [mpmath.gammainc(z[n],a[n],np.inf, regularized=True) for n in range(len(z))] #DG
+        #sig = norm.ppf(1 - sig)
+        sig = -norm.ppf(sig) #DG
         sig[sig < 0.0] = 0.0  # If negative, set it to 0
         np.nan_to_num(sig, posinf=0, neginf=0, nan=0, copy=False)  # Avoid errors
         sig[H[0] < Hbkg] = -sig[H[0] < Hbkg]  # Now we can make it signed
@@ -1422,7 +1453,13 @@ class BumpHunter1D:
         print(f"   loc = {self.min_loc_ar[0]}")
         print(f"   width = {self.min_width_ar[0]}")
         print(
-            f"   local p-value | t = {self.min_Pval_ar[0]:.5f} | {self.t_ar[0]:.5f}"
+            f"   local p-value = {self.min_Pval_ar[0]:.5g}"
+        )
+        print(
+            f"   -ln(loc p-value) = {self.t_ar[0]:.5f}"
+        )
+        print(
+            f"   local significance = {norm.ppf(1 - self.min_Pval_ar[0]):.5f}"
         )
         print("")
 
