@@ -12,7 +12,7 @@ from scipy.stats import norm
 from .util import deprecated, deprecated_arg
 
 import warnings, mpmath, sys
-mpmath.mp.dps=300
+mpmath.mp.dps=1000
 
 class BumpHunter1D:
     """The BumpHunter class is the object providing all the necessary tools to "bump hunt" with ease.

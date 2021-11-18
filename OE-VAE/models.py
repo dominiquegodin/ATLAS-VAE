@@ -69,13 +69,13 @@ def KLD_loss(z_mean, z_log_var):
 
 
 def OE_loss(vae, batch_X, batch_X_OE, OE_type, margin=1):
-    """ Calculating outlier jets KLD-OE loss """
+    """ Calculating outlier KLD loss """
     if OE_type == 'KLD':
         z_mean   , z_log_var   , _ = vae.encoder(batch_X)
         z_mean_OE, z_log_var_OE, _ = vae.encoder(batch_X_OE)
         loss = KLD_loss(z_mean, z_log_var) - KLD_loss(z_mean_OE, z_log_var_OE) + margin
         return tf.keras.activations.relu(loss)
-    """ Calculating outlier jets MSE-OE loss """
+    """ Calculating outlier MSE loss """
     reconstructed    = vae(batch_X)
     reconstructed_OE = vae(batch_X_OE)
     loss_MSE    = tf.keras.losses.MSE(batch_X   , reconstructed)
@@ -104,12 +104,6 @@ def get_losses(vae, data, OE_type, beta, lamb):
 def build_model(vae, train_dataset, valid_dataset, OE_type='KLD', n_epochs=1, beta=0, lamb=0, lr=1e-3):
     """ Using subclassing Tensoflow API to build model """
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
-    #optimizer = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.0, nesterov=False)
-    #optimizer = tf.keras.optimizers.Adadelta(learning_rate=lr, rho=0.95, epsilon=1e-07)
-    #optimizer = tf.keras.optimizers.Adagrad (learning_rate=lr, initial_accumulator_value=0.1)
-    #optimizer = tf.keras.optimizers.Adamax(learning_rate=lr, beta_1=0.9, beta_2=0.999)
-    #optimizer = tf.keras.optimizers.Nadam(learning_rate=lr, beta_1=0.9, beta_2=0.999)
-    #optimizer = tf.keras.optimizers.RMSprop(learning_rate=1r, rho=0.9, momentum=0.0, centered=False)
     train_len = tf.data.experimental.cardinality(train_dataset).numpy()
     valid_len = tf.data.experimental.cardinality(valid_dataset).numpy()
     metric_MSE   = tf.keras.metrics.Mean()

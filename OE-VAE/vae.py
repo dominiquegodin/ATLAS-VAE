@@ -46,30 +46,14 @@ for key in ['n_train', 'n_valid', 'n_test', 'n_W', 'n_top', 'batch_size']:
 #combined_plots(args.n_test, args.n_top, args.output_dir+'/plots', plot_var='M')
 
 
-'''
-import h5py
-data_path = '/opt/tmp/godin/AD_data'
-#file_name = 'Atlas_topo-dijet.h5'
-#file_name = 'Atlas_topo-ttbar.h5'
-#file_name = 'Atlas_UFO-dijet.h5'
-file_name = 'Atlas_UFO-ttbar.h5'
-#file_name = 'Atlas_BSM.h5'
-data      = h5py.File(data_path+'/'+file_name,"r")
-for key in data: print( key, data[key].shape, data[key].dtype )
-print( np.sum(data['weights']) )
-#print( np.min(data['JZW']), np.max(data['JZW']) )
-#print(data['DSID'][:] )
-sys.exit()
-'''
-
-
 # METRICS LIST
 metrics = ['MSE', 'MAE'] + ['X-S'] + ['JSD', 'EMD', 'KSD', 'KLD'] + ['Inputs', 'Latent']
 
 
 # CUTS ON SIGNAL AND BACKGROUND SAMPLES
-cuts  = ['(sample["pt"] >= 0)', '(sample["weights"] <= 200)']
-sig_cuts = cuts + ['(sample["pt"] <= 2000)']
+cuts = ['(sample["pt"] >= 0)']
+# 302321, 310464, 449929, 450283
+sig_cuts = cuts + ['(sample["pt"] <= 6000)'] + ['(sample["DSID"] == 450283)']
 bkg_cuts = cuts + ['(sample["pt"] <= 6000)']
 
 
@@ -99,7 +83,7 @@ if args.model_in != args.output_dir+'/':
     sys.stdout = sys.__stdout__        #Resuming screen output
     model.load_weights(args.model_in)
 if args.scaling == 'ON' and os.path.isfile(args.scaler_in):
-    print('\nLoading scaler transform  from:', args.scaler_in)
+    print('\nLoading scaler transform from:', args.scaler_in)
     scaler = pickle.load(open(args.scaler_in, 'rb'))
 args.output_dir += '/plots'
 for path in list(accumulate([folder+'/' for folder in args.output_dir.split('/')])):
@@ -141,7 +125,6 @@ if args.n_epochs > 0:
 
 # MODEL PREDICTIONS ON VALIDATION DATA
 print('\n+'+30*'-'+'+\n+--- TEST SAMPLE EVALUATION ---+\n+'+30*'-'+'+')
-#dsids = ['302321', '302326', '302331']
 sample = make_sample(args.n_dims, args.n_constituents, 'qcd-UFO', 'BSM', args.n_test, args.n_top,
                      bkg_cuts, sig_cuts, dsids=None, adjust_weights=True)
 sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
