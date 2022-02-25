@@ -10,15 +10,12 @@ class Encoder(layers.Layer):
         super(Encoder, self).__init__(name=name, **kwargs)
         self.FC_layers = FC_layers[:-1]; self.seed = seed
         self.denses = [layers.Dense(n_neurons, activation="relu") for n_neurons in self.FC_layers]
-        #self.denses = [layers.Dense(n_neurons, kernel_initializer='he_normal') for n_neurons in self.FC_layers]
         self.dense_mean    = layers.Dense(FC_layers[-1])
         self.dense_log_var = layers.Dense(FC_layers[-1])
         self.sampling = Sampling()
     def call(self, x):
         for dense in self.denses:
-            #x = layers.BatchNormalization()(x)
             x = dense(x)
-            #x = layers.Activation('relu')(x)
         z_mean    = self.dense_mean(x)
         z_log_var = self.dense_log_var(x)
         z         = self.sampling([z_mean, z_log_var], seed=self.seed)
@@ -27,27 +24,24 @@ class Encoder(layers.Layer):
 
 class Decoder(layers.Layer):
     """ Converting the encoded digit vector z back to input space """
-    def __init__(self, output_dim, FC_layers, name="decoder", **kwargs):
+    def __init__(self, FC_layers, output_dim, name="decoder", **kwargs):
         super(Decoder, self).__init__(name=name, **kwargs)
         self.FC_layers = FC_layers[:-1][::-1]
         self.denses = [layers.Dense(n_neurons, activation="relu") for n_neurons in self.FC_layers]
-        #self.denses = [layers.Dense(n_neurons, kernel_initializer='he_normal') for n_neurons in self.FC_layers]
         self.dense_output = layers.Dense(output_dim, activation='linear')
     def call(self, x):
         for dense in self.denses:
-            #x = layers.BatchNormalization()(x)
             x = dense(x)
-            #x = layers.Activation('relu')(x)
         return self.dense_output(x)
 
 
 class VariationalAutoEncoder(models.Model):
     """ Combining the encoder and decoder into a VAE model for training """
-    def __init__(self, input_dim, FC_layers, seed=None, name="autoencoder", **kwargs):
+    def __init__(self, FC_layers, input_dim, seed=None, name="autoencoder", **kwargs):
         super(VariationalAutoEncoder, self).__init__(name=name, **kwargs)
         self.input_dim = input_dim
         self.encoder   = Encoder(FC_layers, seed=seed)
-        self.decoder   = Decoder(input_dim, FC_layers)
+        self.decoder   = Decoder(FC_layers, input_dim)
     def call(self, inputs):
         z_mean, z_log_var, z = self.encoder(inputs)
         reconstructed = self.decoder(z)
@@ -101,7 +95,7 @@ def get_losses(vae, data, OE_type, beta, lamb):
     return loss_MSE, loss_KLD, loss_OE, loss_MSE + loss_KLD + loss_OE
 
 
-def build_model(vae, train_dataset, valid_dataset, OE_type='KLD', n_epochs=1, beta=0, lamb=0, lr=1e-3):
+def train_model(vae, train_dataset, valid_dataset, OE_type='KLD', n_epochs=1, beta=0, lamb=0, lr=1e-3):
     """ Using subclassing Tensoflow API to build model """
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     train_len = tf.data.experimental.cardinality(train_dataset).numpy()
