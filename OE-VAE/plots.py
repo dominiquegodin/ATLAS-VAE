@@ -275,7 +275,7 @@ def quantile_reconstruction(y_true, X_true, X_pred, sample, scaler, output_dir):
     #pt_reconstruction(sample['clusters'], X_pred, y_true, None, output_dir)
 
 
-def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10]):
+def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     colors_dict = {'MSE':'tab:green', 'MAE'   :'tab:brown' , 'X-S'   :'tab:purple',
                    'JSD':'tab:blue' , 'EMD'   :'tab:orange', 'KSD'   :'black'     ,
                    'KLD':'tab:red'  , 'Inputs':'gray'      , 'Latent':'tab:cyan'}
@@ -289,13 +289,15 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wp=[1,10]):
                  {'color':colors_dict[metric], 'fontsize':14}, va='center', ha='right', transform=axes.transAxes)
         plt.plot(100*tpr[len_0:], 1/fpr[len_0:], label=metric, lw=2, color=colors_dict[metric])
     metrics_scores = [[metrics_dict[metric][key] for key in ['fpr','tpr']] for metric in metrics_list]
-    scores     = [np.max([1/fpr[np.argwhere(100*tpr >= val)[0]] for fpr,tpr in metrics_scores]) for val in wp]
-    scores_idx = [np.argmax([1/fpr[np.argwhere(100*tpr >= val)[0]] for fpr,tpr in metrics_scores]) for val in wp]
-    for n in np.arange(len(wp)):
-        color = colors_dict[metrics_list[scores_idx[n]]]
-        axes.axhline(scores[n], xmin=wp[n]/100, xmax=1, ls='--', linewidth=1., color='dimgray')
-        plt.text(100.4, scores[n], str(int(scores[n])), {'color':color, 'fontsize':14}, va="center", ha="left")
-        axes.axvline(wp[n], ymin=0, ymax=np.log(scores[n])/np.log(1e4), ls='--', linewidth=1., color='dimgray')
+    for wp in wps:
+        try:
+            score     = np.max([1/fpr[np.argwhere(100*tpr >= wp)[0]] for fpr,tpr in metrics_scores])
+            score_idx = np.argmax([1/fpr[np.argwhere(100*tpr >= wp)[0]] for fpr,tpr in metrics_scores])
+            color = colors_dict[metrics_list[score_idx]]
+            axes.axhline(score, xmin=wp/100, xmax=1, ls='--', linewidth=1., color='dimgray')
+            plt.text(100.4, score, str(int(score)), {'color':color, 'fontsize':14}, va="center", ha="left")
+            axes.axvline(wp, ymin=0, ymax=np.log(score)/np.log(1e4), ls='--', linewidth=1., color='dimgray')
+        except: pass
     pylab.xlim(0,100)
     pylab.ylim(1,1e3)
     plt.yscale('log')

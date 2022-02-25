@@ -317,8 +317,6 @@ def best_threshold(y_true, X_loss, X_mass, weights, cut_type):
 
 def apply_best_cut(y_true, X_true, X_pred, sample, n_dims, model, metric, cut_type='gain'):
     if metric == 'Latent': X_loss = latent_loss(X_true, model)
-#        model(X_true)
-#        X_loss = model.losses[0].numpy()
     else: X_loss = loss_function(X_true, X_pred, n_dims, metric, multiloss=False)
     loss_cut, loss_val = best_threshold(y_true, X_loss, sample['m'], sample['weights'], cut_type)
     print('Best', metric, 'cut on '+format(cut_type,'5s')+':', metric, '>=', end= ' ')
@@ -358,8 +356,6 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,300], bins=50
 
 
 def latent_loss(X_true, model):
-    #size = len(X_true)
-    #idx_tuples = get_idx(size, n_bins=int(size//1e6))
     idx_tuples = get_idx(len(X_true), bin_size=1e6)
     X_latent = []
     for idx in idx_tuples:
@@ -376,58 +372,3 @@ def get_idx(max_val, n_bins=10, bin_size=None, min_val=0, integer=True, tuples=T
     if integer: idx_list = np.int_(idx_list)
     if tuples: return list(zip(idx_list[:-1], idx_list[1:]))
     else     : return idx_list
-
-
-'''
-def get_idx(size, start_val=0, n_sets=8):
-    n_sets   = max(1,min(size, n_sets))
-    idx_list = [start_val + n*(size//n_sets) for n in np.arange(n_sets)] + [start_val+size]
-    print(idx_list)
-    return list(zip(idx_list[:-1], idx_list[1:]))
-'''
-'''
-def reweighting(sample, sig, bkg, weight_type, m_bins, pt_bins, density=False):
-    m_sig, pt_sig  = sample['m'][sig], sample['pt'][sig]
-    m_bkg, pt_bkg  = sample['m'][bkg], sample['pt'][bkg]
-    weights_sig    = sample['weights'][sig]
-    weights_bkg    = sample['weights'][bkg]
-    m_min, m_max   = np.min(m_sig), np.max(m_sig)
-    pt_min, pt_max = np.min(pt_sig), np.max(pt_sig)
-    #print(m_min, m_max); print(pt_min, pt_max)
-    m_width  = (m_max - m_min) / m_bins
-    m_bins   = [m_min + k*m_width for k in np.arange(1.01*m_bins)]
-    m_idx    = np.clip(np.digitize( m_sig,  m_bins, right=False), 1, len( m_bins)-1) - 1
-    pt_width = (pt_max - pt_min) / pt_bins
-    pt_bins  = [pt_min + k*pt_width for k in np.arange(pt_bins+1)]
-    pt_idx   = np.clip(np.digitize(pt_sig, pt_bins, right=False), 1, len(pt_bins)-1) - 1
-    hist_sig = np.maximum(np.histogram2d(m_sig, pt_sig, bins=[m_bins, pt_bins], density=density)[0], 1)
-    #hist_sig = np.maximum(hist_sig, 1)
-    #hist_bkg[(hist_bkg==0)|(hist_sig==0)] = 1 ;hist_sig[(hist_bkg==0)|(hist_sig==0)] = 1
-    if weight_type == 'flat':
-        weights = (1/hist_sig)[m_idx, pt_idx]
-        return weights*np.sum(weights_sig)/np.sum(weights)
-    hist_bkg = np.histogram2d(m_bkg, pt_bkg, bins=[m_bins, pt_bins], weights=weights_bkg, density=density)[0]
-    return (hist_bkg/hist_sig)[m_idx, pt_idx]
-'''
-'''
-def flat_weighting(pt, xs_weights, n_bins, density=True):
-    bin_bin_size = (np.max(pt) - np.min(pt)) / n_bins
-    pt_bins = [np.min(pt) + k*bin_bin_size for k in np.arange(n_bins+1)]
-    pt_idx  = np.minimum(np.digitize(pt, pt_bins, right=False), len(pt_bins)-1) - 1
-    hist_pt = np.histogram(pt, pt_bins, density=density)[0]
-    hist_pt = np.maximum(hist_pt, np.min(hist_pt[hist_pt!=0]))
-    weights = 1/hist_pt[pt_idx]
-    return weights*np.sum(xs_weights)/np.sum(weights)
-'''
-'''
-def W_weighting(QCD_M, QCD_weights, W_M, n_bins=100, density=False):
-    min_M = max( np.min(QCD_M), np.min(W_M) )
-    max_M = min( np.max(QCD_M), np.max(W_M) )
-    bin_width = (max_M - min_M) / n_bins
-    M_bins    = [min_M + k*bin_width for k in np.arange(n_bins+1)]
-    W_idx     = np.minimum(np.digitize(W_M, M_bins, right=False), len(M_bins)-1) - 1
-    QCD_hist  = np.histogram(QCD_M, bins=M_bins, weights=QCD_weights, range=(min_M, max_M), density=density)[0]
-    W_hist    = np.maximum( np.histogram(W_M, bins=M_bins, range=(min_M, max_M), density=density)[0], 1 )
-    W_weights = (QCD_hist/W_hist)[W_idx]
-    return W_weights
-'''
