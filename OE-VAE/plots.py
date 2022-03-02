@@ -1,7 +1,7 @@
 import numpy             as np
 import multiprocessing   as mp
 import matplotlib.pyplot as plt
-import sys, warnings
+import sys, os, warnings
 from matplotlib    import pylab, ticker
 from sklearn       import metrics
 from scipy.spatial import distance
@@ -25,14 +25,14 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, wp_metric, output_dir)]
     processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
-    #arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
-    #processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
+    arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
+    processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
     for job in processes: job.start()
     for job in processes: job.join()
 
 
-def bump_scan(y_true, X_loss, sample, sig_data, output_dir, n_cuts=100):
+def bump_scan(y_true, X_loss, sample, sig_data, output_dir, n_cuts=200):
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=sample['weights'])
     step = max(1,len(fpr)//n_cuts)
     fpr, tpr, losses = fpr[::step], tpr[::step], thresholds[::step]
@@ -79,7 +79,7 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
     min_dict = {'MSE':0  , 'MAE':0  , 'X-S'   :0  , 'JSD'   :0,   'EMD':0,
                 'KSD':0  , 'KLD':0  , 'Inputs':0  , 'Latent':0}
     max_dict = {'MSE':0.001, 'MAE':0.05, 'X-S'   :0.5 , 'JSD'   :1, 'EMD':1,
-                'KSD':1.0  , 'KLD':0.5 , 'Inputs':0.02, 'Latent':2e3}
+                'KSD':1.0  , 'KLD':0.5 , 'Inputs':0.02, 'Latent':20}
     min_loss  = min_dict[metric]
     max_loss  = min(max_dict[metric], np.max(X_loss))
     bin_width = (max_loss-min_loss)/n_bins
@@ -99,8 +99,10 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
     plt.xlabel(label, fontsize=24)
     plt.ylabel('Distribution density (%)', fontsize=24)
     plt.legend(loc='upper right', fontsize=18)
+    output_dir += '/'+'metrics_losses'
+    if not os.path.isdir(output_dir): os.mkdir(output_dir)
     file_name = output_dir+'/'+metric+'_loss.png'
-    print('Saving loss distributions to:', file_name); plt.savefig(file_name)
+    print('Saving metric loss       to:', file_name); plt.savefig(file_name)
 
 
 def mass_distances(y_true, X_losses, X_mass, weights, metric, distances_dict, n_cuts=100):
@@ -118,7 +120,7 @@ def mass_distances(y_true, X_losses, X_mass, weights, metric, distances_dict, n_
         bkg_weights_cut = bkg_weights[bkg_loss>losses[n]]
         if len(bkg_mass_cut) != 0:
             Q = np.histogram(bkg_mass_cut, bins=100, range=(0,500), weights=bkg_weights_cut)[0]
-            KSD += [ KS_distance(bkg_mass, bkg_mass_cut, bkg_weights, bkg_weights_cut) ]
+            #KSD += [ KS_distance(bkg_mass, bkg_mass_cut, bkg_weights, bkg_weights_cut) ]
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
                 JSD += [ distance.jensenshannon(P, Q) ]
@@ -158,9 +160,10 @@ def mass_correlation(y_true, X_losses, X_mass, weights, metrics_list, wp_metric,
     processes = [mp.Process(target=mass_distances, args=arg) for arg in arguments]
     for job in processes: job.start()
     for job in processes: job.join()
-    plt.figure(figsize=(11,16));
-    plt.subplot(2, 1, 1); make_plot('KSD', wp_metric)
-    plt.subplot(2, 1, 2); make_plot('JSD', wp_metric)
+    plt.figure(figsize=(13,8)); make_plot('JSD', wp_metric)
+    #plt.figure(figsize=(11,16));
+    #plt.subplot(2, 1, 1); make_plot('KSD', wp_metric)
+    #plt.subplot(2, 1, 2); make_plot('JSD', wp_metric)
     file_name = output_dir + '/' + 'mass_correlation.png'
     print('Saving mass sculpting    to:', file_name); plt.savefig(file_name)
 
@@ -214,6 +217,9 @@ def plot_distributions(samples, output_dir, bin_sizes, plot_var, sig_tag, weight
     if 'OoD' in sig_tag:
         if   plot_var == 'm' : pylab.xlim(0, 1200); pylab.ylim(1e0, 1e5)
         elif plot_var == 'pt': pylab.xlim(0, 3000); pylab.ylim(1e0, 1e5)
+    elif 'Geneva' in sig_tag:
+        if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e-1, 1e5)
+        elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e-1, 1e5)
     else:
         if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e0, 1e7)
         elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e0, 1e7)
@@ -232,49 +238,6 @@ def plot_distributions(samples, output_dir, bin_sizes, plot_var, sig_tag, weight
     print('Saving', format(plot_var, '2s'), 'distributions  to:', file_name); plt.savefig(file_name)
 
 
-def combined_plots(n_test, n_top, output_dir, plot_var, n_dims=4, n_constituents=20):
-    sample_topo = make_sample(n_constituents, 'qcd-topo', 'top-topo', n_test, n_top, n_dims, adjust_weights=True)
-    sample_UFO  = make_sample(n_constituents, 'qcd-UFO' , 'BSM'     , n_test, n_top, n_dims, adjust_weights=True)
-    samples = [sample_UFO, sample_topo]
-    plot_distributions(samples, output_dir, plot_var, sig_bins=200, bkg_bins=400, sig_tag='top')
-    sys.exit()
-
-
-def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
-    pt_true = get_4v(X_true)['pt']; pt_pred = get_4v(X_pred)['pt']
-    if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
-    min_value = min(np.min(pt_true), np.min(pt_pred))
-    max_value = max(np.max(pt_true), np.max(pt_pred))
-    bin_width = (max_value - min_value) / n_bins
-    bins      = [min_value + k*bin_width for k in np.arange(n_bins+1)]
-    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
-    labels = [r'$t\bar{t}$', 'QCD']; colors = ['tab:orange', 'tab:blue']
-    for n in set(y_true):
-        hist_weights  = weights[y_true==n]
-        hist_weights *= 100/np.sum(hist_weights)/bin_width
-        pylab.hist(pt_true[y_true==n], bins, histtype='step', weights=hist_weights,
-                   label=labels[n]         , lw=2, color=colors[n], alpha=1)
-        pylab.hist(pt_pred[y_true==n], bins, histtype='step', weights=hist_weights,
-                   label=labels[n]+' (rec)', lw=2, color=colors[n], alpha=0.5)
-    pylab.xlim(0.4, 0.5)
-    pylab.ylim(0, 0.5)
-    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
-    axes.tick_params(axis='both', which='major', labelsize=14)
-    plt.xlabel('$p_t$ (scaler space)', fontsize=24)
-    #plt.xlabel('$p_t$ (GeV)', fontsize=24)
-    plt.ylabel('Distribution density (%/GeV)', fontsize=24)
-    plt.legend(loc='upper right', ncol=2, fontsize=18)
-    file_name = output_dir+'/'+'pt_reconstruction.png'
-    print('Saving pt reconstruction  to:', file_name); plt.savefig(file_name)
-def quantile_reconstruction(y_true, X_true, X_pred, sample, scaler, output_dir):
-    pt_reconstruction(X_true, X_pred, y_true, sample['weights'], output_dir)
-    #pt_reconstruction(X_pred, X_pred, y_true, None             , output_dir)
-    #X_true = inverse_scaler(X_true, scaler)
-    #pt_reconstruction(sample['clusters'], X_true, y_true, None, output_dir)
-    #X_pred = inverse_scaler(X_pred, scaler)
-    #pt_reconstruction(sample['clusters'], X_pred, y_true, None, output_dir)
-
-
 def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     colors_dict = {'MSE':'tab:green', 'MAE'   :'tab:brown' , 'X-S'   :'tab:purple',
                    'JSD':'tab:blue' , 'EMD'   :'tab:orange', 'KSD'   :'black'     ,
@@ -290,14 +253,13 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
         plt.plot(100*tpr[len_0:], 1/fpr[len_0:], label=metric, lw=2, color=colors_dict[metric])
     metrics_scores = [[metrics_dict[metric][key] for key in ['fpr','tpr']] for metric in metrics_list]
     for wp in wps:
-        try:
-            score     = np.max([1/fpr[np.argwhere(100*tpr >= wp)[0]] for fpr,tpr in metrics_scores])
-            score_idx = np.argmax([1/fpr[np.argwhere(100*tpr >= wp)[0]] for fpr,tpr in metrics_scores])
-            color = colors_dict[metrics_list[score_idx]]
+        fpr_list = np.array([fpr[np.argwhere(100*tpr >= wp)[0]] for fpr,tpr in metrics_scores])
+        if np.all(fpr_list > 0):
+            score = 1/np.min(fpr_list)
+            color = colors_dict[metrics_list[np.argmin(fpr_list)]]
             axes.axhline(score, xmin=wp/100, xmax=1, ls='--', linewidth=1., color='dimgray')
             plt.text(100.4, score, str(int(score)), {'color':color, 'fontsize':14}, va="center", ha="left")
             axes.axvline(wp, ymin=0, ymax=np.log(score)/np.log(1e4), ls='--', linewidth=1., color='dimgray')
-        except: pass
     pylab.xlim(0,100)
     pylab.ylim(1,1e3)
     plt.yscale('log')
@@ -357,6 +319,49 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     plt.legend(loc='upper left', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
     file_name = output_dir + '/' + 'significance.png'
     print('Saving significance      to:', file_name); plt.savefig(file_name)
+
+
+def combined_plots(n_test, n_top, output_dir, plot_var, n_dims=4, n_constituents=20):
+    sample_topo = make_sample(n_constituents, 'qcd-topo', 'top-topo', n_test, n_top, n_dims, adjust_weights=True)
+    sample_UFO  = make_sample(n_constituents, 'qcd-UFO' , 'BSM'     , n_test, n_top, n_dims, adjust_weights=True)
+    samples = [sample_UFO, sample_topo]
+    plot_distributions(samples, output_dir, plot_var, sig_bins=200, bkg_bins=400, sig_tag='top')
+    sys.exit()
+
+
+def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
+    pt_true = get_4v(X_true)['pt']; pt_pred = get_4v(X_pred)['pt']
+    if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
+    min_value = min(np.min(pt_true), np.min(pt_pred))
+    max_value = max(np.max(pt_true), np.max(pt_pred))
+    bin_width = (max_value - min_value) / n_bins
+    bins      = [min_value + k*bin_width for k in np.arange(n_bins+1)]
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
+    labels = [r'$t\bar{t}$', 'QCD']; colors = ['tab:orange', 'tab:blue']
+    for n in set(y_true):
+        hist_weights  = weights[y_true==n]
+        hist_weights *= 100/np.sum(hist_weights)/bin_width
+        pylab.hist(pt_true[y_true==n], bins, histtype='step', weights=hist_weights,
+                   label=labels[n]         , lw=2, color=colors[n], alpha=1)
+        pylab.hist(pt_pred[y_true==n], bins, histtype='step', weights=hist_weights,
+                   label=labels[n]+' (rec)', lw=2, color=colors[n], alpha=0.5)
+    pylab.xlim(0.4, 0.5)
+    pylab.ylim(0, 0.5)
+    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+    axes.tick_params(axis='both', which='major', labelsize=14)
+    plt.xlabel('$p_t$ (scaler space)', fontsize=24)
+    #plt.xlabel('$p_t$ (GeV)', fontsize=24)
+    plt.ylabel('Distribution density (%/GeV)', fontsize=24)
+    plt.legend(loc='upper right', ncol=2, fontsize=18)
+    file_name = output_dir+'/'+'pt_reconstruction.png'
+    print('Saving pt reconstruction  to:', file_name); plt.savefig(file_name)
+def quantile_reconstruction(y_true, X_true, X_pred, sample, scaler, output_dir):
+    pt_reconstruction(X_true, X_pred, y_true, sample['weights'], output_dir)
+    #pt_reconstruction(X_pred, X_pred, y_true, None             , output_dir)
+    #X_true = inverse_scaler(X_true, scaler)
+    #pt_reconstruction(sample['clusters'], X_true, y_true, None, output_dir)
+    #X_pred = inverse_scaler(X_pred, scaler)
+    #pt_reconstruction(sample['clusters'], X_pred, y_true, None, output_dir)
 
 
 def get_rates(y_true, X_losses, weights, metric, return_dict):

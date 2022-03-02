@@ -17,7 +17,7 @@ else
     PATHS=/lcg,/opt
 fi
 
-SIF=/opt/tmp/godin/sing_images/tf-2.3.3-gpu-jupyter_sing-2.6.sif
+SIF=/opt/tmp/godin/sing_images/tf-2.1.0-gpu-py3_sing-2.6.sif
 singularity shell --nv --bind $PATHS $SIF vae.sh
 
 mkdir -p log_files

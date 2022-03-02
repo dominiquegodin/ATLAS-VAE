@@ -18,8 +18,8 @@ def make_datasets(sample, sample_OE, batch_size=1):
 def make_sample(n_constituents, bkg_data, sig_data, bkg_idx=1, sig_idx=1, bkg_cuts='', sig_cuts='',
                 n_dims=4, adjust_weights=False, DSIDs=[]):
     data_path  = '/opt/tmp/godin/AD_data'
-    data_files = {'qcd-Geneva' :'converted_20210629_QCDjj_pT_450_1200_nevents_10M.h5'      ,
-                  'top-Geneva' :'converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5',
+    data_files = {'qcd-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M.h5'      ,
+                  'top-Geneva' :'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5',
                   'qcd-Delphes':'Delphes_dijet.h5'   ,
                   'top-Delphes':'Delphes_ttbar.h5'   ,
                   'qcd-topo'   :'Atlas_topo-dijet.h5',
@@ -64,8 +64,8 @@ def make_sample(n_constituents, bkg_data, sig_data, bkg_idx=1, sig_idx=1, bkg_cu
     return sample
 
 
-def load_data(data_file, data, idx, n_constituents, adjust_weights, cuts, DSIDs=[], bkg=False):
-    print('Loading', format(data,'^11s'), 'sample', end=' ', flush=True)
+def load_data(data_file, data_type, idx, n_constituents, adjust_weights, cuts, DSIDs=[], bkg=False):
+    print('Loading', format(data_type,'^11s'), 'sample', end=' ', flush=True)
     data     = h5py.File(data_file,"r"); start_time = time.time()
     var_list = ['pt_calo','m_calo','rljet_m_comb','rljet_pt_comb','weights','JZW','rljet_n_constituents','DSID']
     sample   = {key:data[key][idx[0]:idx[1]] for key in set(var_list)&set(data) if key!='constituents'}
@@ -79,7 +79,7 @@ def load_data(data_file, data, idx, n_constituents, adjust_weights, cuts, DSIDs=
     sample['pt'] = sample.pop('rljet_pt_comb' if 'rljet_pt_comb' in sample else 'pt_calo')
     sample['m']  = sample.pop('rljet_m_comb'  if 'rljet_m_comb'  in sample else  'm_calo')
     if 'JZW' not in sample:
-        sample['JZW'] = np.full(len(sample['constituents']), 0 if 'qcd' in data else -1, dtype=np.float32)
+        sample['JZW'] = np.full(len(sample['constituents']), 0 if 'qcd' in data_type else -1, dtype=np.float32)
     if 'weights' not in sample:
         sample['weights'] = np.full(len(sample['constituents']), 1, dtype=np.float32)
     """ Adjusting weights for cross-section """

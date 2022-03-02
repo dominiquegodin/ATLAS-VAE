@@ -30,7 +30,6 @@ parser.add_argument( '--beta'          , default = 0            , type = float  
 parser.add_argument( '--lamb'          , default = 0            , type = float         )
 parser.add_argument( '--n_iter'        , default = 1            , type = int           )
 parser.add_argument( '--DSIDs'         , default = []           , type = int, nargs='+')
-#DSIDs: 302321,310464,449929,450282,450283,450284
 parser.add_argument( '--OE_type'       , default = 'KLD'                               )
 parser.add_argument( '--weight_type'   , default = 'flat_pt'                           )
 parser.add_argument( '--output_dir'    , default = 'outputs'                           )
@@ -45,13 +44,18 @@ parser.add_argument( '--bump_hunter'   , default = 'OFF'                        
 args = parser.parse_args()
 for key in ['n_train', 'n_valid', 'n_test', 'n_OoD', 'n_sig', 'batch_size']:
     vars(args)[key] = int(vars(args)[key])
+print('\nPROGRAM ARGUMENTS:\n'+tabulate(vars(args).items(), tablefmt='psql'))
+#DSIDs: 302321,310464,449929,450282,450283,450284
 #combined_plots(args.n_test, args.n_sig, args.output_dir+'/plots', plot_var='M')
 
 
 # TRAINING AND TESTING SAMPLES
-bkg_data = 'qcd-UFO'
+#bkg_data = 'qcd-UFO'
+#OoD_data = 'W-OoD'
+#sig_data = 'top-UFO'
+bkg_data = 'qcd-Geneva'
 OoD_data = 'H-OoD'
-sig_data = 'top-UFO'
+sig_data = 'top-Geneva'
 
 
 # CUTS ON SIGNAL AND BACKGROUND SAMPLES
@@ -61,10 +65,10 @@ OoD_cuts = gen_cuts + ['(sample["pt"] <= 3000)']
 sig_cuts = gen_cuts + ['(sample["pt"] <= 3000)']
 
 
-# SAMPLES SIZES
+# SAMPLES RANGES
 args.n_train = (0              , args.n_train                  )
 args.n_valid = (args.n_train[1], args.n_train[1] + args.n_valid)
-args.n_test  = (args.n_valid[1], args.n_valid[1] + args.n_test )
+args.n_test  = (-args.n_test   , None                          )
 
 
 # METRICS LIST
@@ -75,7 +79,6 @@ metrics = ['MSE', 'MAE'] + ['X-S'] + ['JSD', 'EMD', 'KSD', 'KLD'] + ['Inputs', '
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR) #Suppressing Tensorflow warnings
 seed  = None if args.n_epochs > 0 else 0
 model = VariationalAutoEncoder(args.FC_layers, args.n_dims*args.n_constituents, seed=seed)
-print('\nPROGRAM ARGUMENTS:\n'+tabulate(vars(args).items(), tablefmt='psql'))
 args.model_in   = args.output_dir+'/'+args.model_in
 args.model_out  = args.output_dir+'/'+args.model_out
 args.scaler_in  = args.output_dir+'/'+args.scaler_in
@@ -119,6 +122,7 @@ if args.n_epochs > 0:
         if not os.path.isfile(args.scaler_in):
             JZW    = train_sample['JZW']
             scaler = fit_scaler(train_sample['constituents'][JZW!=-1], args.n_dims, args.scaler_out)
+        print()
         train_sample['constituents'] = apply_scaler(train_sample['constituents'], args.n_dims, scaler)
         valid_sample['constituents'] = apply_scaler(valid_sample['constituents'], args.n_dims, scaler)
     train_sample, train_sample_OE = separate_sample(train_sample)
@@ -140,7 +144,7 @@ sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
 """ Defining labels """
 y_true = np.where(sample['JZW']==-1, 0, 1)
 """ Adjusting signal weights (Delphes samples)"""
-#sample['weights'][y_true==0] /= 10
+if sig_data == 'top-Geneva': sample['weights'][y_true==0] /= 10
 #for var in ['m','pt']: plot_distributions(sample, args.output_dir, bin_sizes={'m':2.5,'pt':10},
 #                                          plot_var=var, sig_tag=sig_data, file_name=var+'_valid.png')
 if args.scaling=='ON': X_true = apply_scaler(sample['constituents'], args.n_dims, scaler)
