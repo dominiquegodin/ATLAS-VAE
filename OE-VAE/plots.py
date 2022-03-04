@@ -34,16 +34,20 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
 
 def bump_scan(y_true, X_loss, sample, sig_data, output_dir, n_cuts=200):
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=sample['weights'])
-    step = max(1,len(fpr)//n_cuts)
-    fpr, tpr, losses = fpr[::step], tpr[::step], thresholds[::step]
+    step = 100/n_cuts
+    tpr_val = np.append(np.arange(0,20,step), np.arange(20,100,step))
+    idx = np.minimum(np.searchsorted(100*tpr, tpr_val, side='right'), len(tpr)-1)
     sample = {key:sample[key] for key in ['JZW','m','pt','weights']}
     global get_sigma
     def get_sigma(sample, X_loss, losses, tpr, idx):
         cut_sample = {key:sample[key][X_loss>losses[idx]] for key in sample}
-        try: return 100*tpr[idx], bump_hunter(cut_sample, make_histo=False), losses[idx]
-        except: return None, None, None
+        try:
+            sigma = bump_hunter(cut_sample, make_histo=False)
+            return tpr[idx], sigma, losses[idx]
+        except:
+            return None, None, None
     with mp.Pool() as pool:
-        pool_list = pool.map(partial(get_sigma, sample, X_loss, losses, tpr), np.arange(len(losses)))
+        pool_list = pool.map(partial(get_sigma, sample, X_loss, thresholds, 100*tpr), idx)
     sig_eff, sigma, losses = zip(*list(pool_list))
     sig_eff, sigma = [n for n in sig_eff if n!=None], [n for n in sigma if n!=None]
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
@@ -218,8 +222,8 @@ def plot_distributions(samples, output_dir, bin_sizes, plot_var, sig_tag, weight
         if   plot_var == 'm' : pylab.xlim(0, 1200); pylab.ylim(1e0, 1e5)
         elif plot_var == 'pt': pylab.xlim(0, 3000); pylab.ylim(1e0, 1e5)
     elif 'Geneva' in sig_tag:
-        if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e-1, 1e5)
-        elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e-1, 1e5)
+        if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e-2, 1e5)
+        elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e-2, 1e5)
     else:
         if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e0, 1e7)
         elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e0, 1e7)
@@ -254,14 +258,14 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     metrics_scores = [[metrics_dict[metric][key] for key in ['fpr','tpr']] for metric in metrics_list]
     for wp in wps:
         fpr_list = np.array([fpr[np.argwhere(100*tpr >= wp)[0]] for fpr,tpr in metrics_scores])
-        if np.all(fpr_list > 0):
+        if np.all(fpr_list > 1e-4):
             score = 1/np.min(fpr_list)
             color = colors_dict[metrics_list[np.argmin(fpr_list)]]
             axes.axhline(score, xmin=wp/100, xmax=1, ls='--', linewidth=1., color='dimgray')
             plt.text(100.4, score, str(int(score)), {'color':color, 'fontsize':14}, va="center", ha="left")
             axes.axvline(wp, ymin=0, ymax=np.log(score)/np.log(1e4), ls='--', linewidth=1., color='dimgray')
     pylab.xlim(0,100)
-    pylab.ylim(1,1e3)
+    pylab.ylim(1,1e4)
     plt.yscale('log')
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     plt.yticks([10**int(n) for n in np.arange(0,5)], ['1','$10^1$','$10^2$','$10^3$','$10^4$'])
@@ -277,7 +281,7 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     for metric in metrics_list:
         fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
         len_0    = np.sum(fpr==0)
-        ROC_var = tpr[len_0:]/fpr[len_0:]
+        ROC_var  = tpr[len_0:]/fpr[len_0:]
         max_ROC_var = max(max_ROC_var, np.max(ROC_var[100*tpr[len_0:]>=1]))
         plt.plot(100*tpr[len_0:], ROC_var, label=metric, lw=2, color=colors_dict[metric])
     pylab.xlim(1,100)
