@@ -1,10 +1,9 @@
 # TRAINING AND VALIDATION
-python vae.py --n_train=1e6 --n_valid=1e6 --n_test=1e6  \
-              --n_OoD=1e6 --n_sig=1e6                   \
-	      --batch_size=5e3 --n_epochs=50            \
-              --n_constituents=20                       \
-	      --beta=0.1 --lamb=0                       \
+python vae.py --n_train=8e6 --n_valid=1e6               \
+              --n_OoD=2e6 --n_sig=1e6 --n_const=20      \
+	      --batch_size=1e4 --n_epochs=50 --lr=1e-3  \
+	      --beta=2 --lamb=50                        \
               --output_dir=outputs/test                 \
+              --weight_type=X-S --OE_type=KLD           \
               --plotting=ON --apply_cut=ON              \
-              --weight_type=OoD_2d --OE_type=KLD        \
-	      #--model_in=model.h5 --scaler_in=scaler.pkl
+              --scaler_in=scaler.pkl #--model_in=model.h5

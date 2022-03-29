@@ -1,23 +1,14 @@
 import numpy           as np
 import tensorflow      as tf
 import multiprocessing as mp
-import sys, h5py, time, pickle, warnings
+import os, sys, h5py, time, pickle, warnings
 from   sklearn       import preprocessing, metrics, utils
 from   scipy.spatial import distance
 from   scipy         import stats
 from   energyflow    import emd
 
 
-def make_datasets(sample, sample_OE, batch_size=1):
-    X    = (sample   ['constituents'], sample   ['weights'])
-    X_OE = (sample_OE['constituents'], sample_OE['weights'])
-    dataset = tf.data.Dataset.from_tensor_slices( X + X_OE )
-    return dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-
-
-def make_sample(n_constituents, bkg_data, sig_data, bkg_idx=1, sig_idx=1, bkg_cuts='', sig_cuts='',
-                n_dims=4, adjust_weights=False, DSIDs=[]):
-    data_path  = '/opt/tmp/godin/AD_data'
+def get_file(data_type, data_path  = '/opt/tmp/godin/AD_data' ):
     data_files = {'qcd-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M.h5'      ,
                   'top-Geneva' :'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5',
                   'qcd-Delphes':'Delphes_dijet.h5'   ,
@@ -28,94 +19,188 @@ def make_sample(n_constituents, bkg_data, sig_data, bkg_idx=1, sig_idx=1, bkg_cu
                   'top-UFO'    :'Atlas_UFO-ttbar.h5' ,
                   'BSM'        :'Atlas_BSM.h5'       ,
                   'W-OoD'      :'resamples_oe_w.h5'  ,
-                  'H-OoD'      :'H_HpHm_generation_mh2_merged_mhc_merged_merged.h5'}
-    bkg_file = data_path + '/' + data_files[bkg_data]
-    sig_file = data_path + '/' + data_files[sig_data]
-    if np.isscalar(bkg_idx): bkg_idx = (0, bkg_idx)
-    if np.isscalar(sig_idx): sig_idx = (0, sig_idx)
-    if sig_idx[0] != sig_idx[1]:
-        sig_sample = load_data(sig_file, sig_data, sig_idx, n_constituents, adjust_weights, sig_cuts, DSIDs)
-        if 'OoD' in sig_data and False:
-            """ Merging W-OoD and H-OoD"""
-            extra_sig    = 'W-OoD' if sig_data=='H-OoD' else 'H-OoD'
-            extra_file   = data_path + '/' + data_files[extra_sig]
-            extra_sample = load_data(extra_file, extra_sig, sig_idx, n_constituents, adjust_weights, sig_cuts)
-            sig_sample   = {key:utils.shuffle(np.concatenate([sig_sample[key], extra_sample[key]]), random_state=0)
-                            for key in set(sig_sample) & set(extra_sample)}
-    if bkg_idx[0] != bkg_idx[1]:
-        bkg_sample = load_data(bkg_file, bkg_data, bkg_idx, n_constituents, adjust_weights, bkg_cuts)
-    if   'sig_sample' not in locals():
-        sample = bkg_sample
-    elif 'bkg_sample' not in locals():
-        sample = sig_sample
-    else:
-        if 'OoD'in sig_data:
-            sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]), adjust_weights)
-        sample = {key:np.concatenate([sig_sample[key], bkg_sample[key]])
-                  for key in set(sig_sample) & set(bkg_sample)}
-    if False:
-        """ Scaling (E, px, py, px) with jet pt """
-        sample['constituents'] = sample['constituents']/sample['pt'][:,np.newaxis]
+                  'H-OoD'      :'H_HpHm_generation_merged_with_masses_20_40_60_80_reformatted_nghia.h5'}
+    return data_path + '/' + data_files[data_type]
+
+
+class Batch_Generator(tf.keras.utils.Sequence):
+    def __init__(self, bkg_data, OoD_data, n_bkg=[0,1], n_OoD=[0,1], bkg_cuts='', OoD_cuts='',
+                 n_const=20, n_dims=4, weight_type='X-S', bin_sizes=None , scaler=None, memGB=30):
+        self.bkg_data  = bkg_data ; self.n_bkg  = n_bkg  ; self.bkg_cuts    = bkg_cuts
+        self.n_const   = n_const  ; self.n_dims = n_dims ; self.weight_type = weight_type
+        self.bin_sizes = bin_sizes; self.scaler = scaler
+        self.load_size  = min( np.diff(self.n_bkg)[0], int(1e9*memGB/self.n_const/self.n_dims/4) )
+        self.OoD_sample = load_data(OoD_data, n_OoD, OoD_cuts, n_const, n_dims)
+    def __len__(self):
+        """ Number of batches per epoch """
+        return int(np.ceil(np.diff(self.n_bkg)[0]/self.load_size))
+    def __getitem__(self, gen_idx):
+        bkg_idx    = gen_idx*self.load_size   , (gen_idx+1)*self.load_size
+        bkg_idx    = bkg_idx[0]+self.n_bkg[0], min( bkg_idx[1]+self.n_bkg[0], self.n_bkg[1] )
+        bkg_sample = load_data(self.bkg_data, bkg_idx, self.bkg_cuts, self.n_const, self.n_dims)
+        OoD_sample = upsampling(self.OoD_sample, len(list(bkg_sample.values())[0]))
+        if self.scaler is not None:
+            bkg_sample['constituents'] = apply_scaling(bkg_sample['constituents'], self.n_dims, self.scaler)
+            OoD_sample['constituents'] = apply_scaling(OoD_sample['constituents'], self.n_dims, self.scaler)
+        if self.bin_sizes is not None:
+            bkg_sample, OoD_sample = reweight_sample(bkg_sample, OoD_sample, self.bin_sizes, self.weight_type)
+        return bkg_sample, OoD_sample
+
+
+def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
+              adjust_weights=False, verbose=False):
+    start_time = time.time()
+    if verbose: print('Loading', format(data_type,'^11s'), 'sample', end=' ', flush=True)
+    if np.isscalar(idx): idx = (0, idx)
+    data_file = get_file(data_type)
+    data      = h5py.File(data_file,"r")
+    if var_list == None:
+        var_list = ['m_calo','pt_calo','rljet_m_comb','rljet_pt_comb','weights','constituents','JZW','DSID']
+    sample = {key:data[key][idx[0]:idx[1]] for key in set(data) & set(var_list) if key!='constituents'}
+    if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0:
+        var_list += ['constituents']
+    if 'constituents' in var_list:
+        sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_const])
+        if 4*n_const > data['constituents'].shape[1]:
+            shape = sample['constituents'].shape
+            zeros_array = np.zeros((shape[0], 4*n_const-shape[1]), dtype=np.float32)
+            sample['constituents'] = np.hstack([sample['constituents'], zeros_array])
+    if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0:
+        sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
+    sample['pt'] = sample.pop('rljet_pt_comb' if 'rljet_pt_comb' in sample else 'pt_calo')
+    sample['m' ] = sample.pop('rljet_m_comb'  if 'rljet_m_comb'  in sample else  'm_calo')
+    sample_size = len(list(sample.values())[0])
+    if 'JZW'     not in sample:
+        sample['JZW'    ] = np.full(sample_size, 0 if 'qcd' in data_type else -1, dtype=np.float32)
+    if 'weights' not in sample:
+        sample['weights'] = np.full(sample_size, 1                              , dtype=np.float32)
+    """ Applying sample cuts"""
+    sample = apply_cuts(sample, cuts, DSIDs)
+    """ Adjusting weights for cross-section """
+    if adjust_weights:
+        sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
+    #""" Scaling (E, px, py, px) with jet pt """
+    #sample['constituents'] = sample['constituents']/sample['pt'][:,np.newaxis]
     if 'constituents' in sample and n_dims == 3:
         """ Using (px, py, px) instead of (E, px, py, px) """
         shape = sample['constituents'].shape
         sample['constituents'] = np.reshape(sample['constituents']        , (-1,shape[1]//4,4))
         sample['constituents'] = np.reshape(sample['constituents'][...,1:], (shape[0],-1)     )
+    if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
 
 
-def load_data(data_file, data_type, idx, n_constituents, adjust_weights, cuts, DSIDs=[], bkg=False):
-    print('Loading', format(data_type,'^11s'), 'sample', end=' ', flush=True)
-    data     = h5py.File(data_file,"r"); start_time = time.time()
-    var_list = ['pt_calo','m_calo','rljet_m_comb','rljet_pt_comb','weights','JZW','rljet_n_constituents','DSID']
-    sample   = {key:data[key][idx[0]:idx[1]] for key in set(var_list)&set(data) if key!='constituents'}
-    sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_constituents])
-    if 4*n_constituents > data['constituents'].shape[1]:
-        shape = sample['constituents'].shape
-        zeros_array = np.zeros((shape[0], 4*n_constituents-shape[1]), dtype=np.float32)
-        sample['constituents'] = np.hstack([sample['constituents'], zeros_array])
-    if len(set(sample) & {'pt_calo','m_calo'}) == 0:
-        sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
-    sample['pt'] = sample.pop('rljet_pt_comb' if 'rljet_pt_comb' in sample else 'pt_calo')
-    sample['m']  = sample.pop('rljet_m_comb'  if 'rljet_m_comb'  in sample else  'm_calo')
-    if 'JZW' not in sample:
-        sample['JZW'] = np.full(len(sample['constituents']), 0 if 'qcd' in data_type else -1, dtype=np.float32)
-    if 'weights' not in sample:
-        sample['weights'] = np.full(len(sample['constituents']), 1, dtype=np.float32)
-    """ Adjusting weights for cross-section """
-    if adjust_weights:
-        sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
-    """ Applying sample cuts"""
-    cut_list = [np.full_like(sample['weights'], True)]
-    for cut in cuts:
-        try: cut_list.append(eval(cut))
-        except KeyError: pass
-    cuts = np.logical_and.reduce(cut_list)
-    if DSIDs != []:
-        dsid_cuts = np.logical_or.reduce([sample['DSID']==int(n) for n in DSIDs])
-        cuts = np.logical_and(cuts, dsid_cuts)
-    if not np.all(cuts):
-        sample = {key:sample[key][cuts] for key in sample}
-    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, bkg_cuts='', sig_cuts='', n_const=20, n_dims=4,
+                var_list=None, DSIDs=None, adjust_weights=False, verbose=True, shuffling=False):
+    sig_sample = load_data(sig_data, sig_idx, sig_cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
+    bkg_sample = load_data(bkg_data, bkg_idx, bkg_cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
+    if 'OoD' in sig_data: sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
+    sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]])
+              for key in set(bkg_sample)&set(sig_sample)}
+    if shuffling: sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
     return sample
 
 
-def separate_sample(sample):
+def split_sample(sample):
     JZW        = sample['JZW']
     bkg_sample = {key:val[JZW!=-1] for key,val in sample.items()}
     sig_sample = {key:val[JZW==-1] for key,val in sample.items()}
     return bkg_sample, sig_sample
 
 
-def upsampling(sample, target_size, adjust_weights):
+def upsampling(sample, target_size, adjust_weights=False, seed=None):
     source_size = len(list(sample.values())[0])
-    np.random.seed(0)
+    np.random.seed(seed)
     indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
     if adjust_weights:
         sample['weights'] = sample['weights']*np.float32(source_size/target_size)
     return {key:np.take(sample[key], indices, axis=0) for key in sample}
 
 
+def make_datasets(sample, sample_OE, batch_size=1):
+    X    = (sample   ['constituents'], sample   ['weights'])
+    X_OE = (sample_OE['constituents'], sample_OE['weights'])
+    dataset = tf.data.Dataset.from_tensor_slices( X + X_OE )
+    return dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+
+
+def merge_losses(losses, history, model_in, output_dir):
+    print('\nSaving training losses to:', history)
+    if os.path.isfile(history) and model_in != output_dir+'/':
+        old_losses = pickle.load(open(history, 'rb'))
+        losses = {key:np.append(old_losses[key], losses[key]) for key in losses}
+    pickle.dump(losses, open(history,'wb'))
+    return losses
+
+
+def apply_cuts(sample, cuts, DSIDs=None):
+    sample_size = len(list(sample.values())[0])
+    cut_list    = [np.full(sample_size, True)]
+    for cut in cuts:
+        try   : cut_list.append(eval(cut))
+        except: pass
+    cuts = np.logical_and.reduce(cut_list)
+    if DSIDs != None:
+        if np.isscalar(DSIDs): DSIDs = [DSIDs]
+        dsid_cuts = np.logical_or.reduce([sample['DSID']==int(n) for n in DSIDs])
+        cuts = np.logical_and(cuts, dsid_cuts)
+    if not np.all(cuts):
+        sample = {key:sample[key][cuts] for key in sample}
+    return sample
+
+
+def reweight_sample(bkg_sample, sig_sample, bin_sizes, weight_type='X-S'):
+    """ None   : no weights (weight=1)                    """
+    """ X-S    : default cross-section weights            """
+    """ flat_m : 1D flat weighting for OoD and background """
+    """ flat_pt: 1D flat weighting for OoD and background """
+    """ flat_2d: 2D flat weighting for OoD and background """
+    """ OoD_m  : 1D weighting of OoD to background        """
+    """ OoD_pt : 1D weighting of OoD to background        """
+    """ OoD_2d : 2D weighting of OoD to background        """
+    if weight_type == None or weight_type.lower() == 'none':
+        sig_sample['weights'] = np.ones_like(sig_sample['weights'])
+        bkg_sample['weights'] = np.ones_like(bkg_sample['weights'])
+    if 'flat' in weight_type:
+        sig_sample['weights'] = get_weights(bkg_sample, sig_sample, bin_sizes, weight_type)
+        bkg_sample['weights'] = get_weights(bkg_sample, bkg_sample, bin_sizes, weight_type)
+        sig_sample['weights'] = get_weights(bkg_sample, sig_sample, bin_sizes, weight_type='2d')
+    if 'OoD' in weight_type:
+        sig_sample['weights'] = get_weights(bkg_sample, sig_sample, bin_sizes, weight_type)
+    return bkg_sample, sig_sample
+
+
+def get_weights(bkg_sample, sig_sample, bin_sizes, weight_type, max_val=1e3, density=True):
+    m_size, pt_size = bin_sizes['m'], bin_sizes['pt']
+    m_bkg, pt_bkg, weights_bkg = [bkg_sample[key] for key in ['m','pt','weights']]
+    m_sig, pt_sig, weights_sig = [sig_sample[key] for key in ['m','pt','weights']]
+    m_min, pt_min = np.min(m_sig), np.min(pt_sig)
+    m_max, pt_max = np.max(m_sig), np.max(pt_sig)
+    #if   'm'  in weight_type: cut_list = [ m_bkg>= m_min,  m_bkg<= m_max]
+    #elif 'pt' in weight_type: cut_list = [pt_bkg>=pt_min, pt_bkg<=pt_max]
+    #else                    : cut_list = [ m_bkg>= m_min,  m_bkg<= m_max] + [pt_bkg>=pt_min, pt_bkg<=pt_max]
+    #m_min, pt_min = min(m_min, np.min(m_bkg)), min(pt_min, np.min(pt_bkg))
+    #m_max, pt_max = max(m_max, np.max(m_bkg)), max(pt_max, np.max(pt_bkg))
+    if 'm'  in weight_type: pt_size = pt_max+1
+    if 'pt' in weight_type:  m_size =  m_max+1
+    m_bins  = get_idx( m_max, bin_size= m_size, min_val= m_min, integer=False, tuples=False)
+    pt_bins = get_idx(pt_max, bin_size=pt_size, min_val=pt_min, integer=False, tuples=False)
+    m_idx   = np.clip(np.digitize( m_sig,  m_bins, right=False), 1, len( m_bins)-1) - 1
+    pt_idx  = np.clip(np.digitize(pt_sig, pt_bins, right=False), 1, len(pt_bins)-1) - 1
+    hist_sig = np.histogram2d(m_sig, pt_sig, bins=[m_bins,pt_bins], density=density)[0]
+    if density: hist_sig *= len(m_sig)
+    hist_sig = np.maximum(hist_sig, np.min(hist_sig[hist_sig!=0]) if density else 1)
+    if 'flat' in weight_type:
+        weights = (1/hist_sig)[m_idx, pt_idx]
+        return weights*np.sum(weights_sig)/np.sum(weights)
+    hist_bkg = np.histogram2d(m_bkg, pt_bkg, bins=[m_bins,pt_bins], weights=weights_bkg, density=density)[0]
+    if density: hist_bkg *= len(m_bkg)
+    weights = (hist_bkg/hist_sig)[m_idx, pt_idx]
+    return np.minimum( max_val, weights*np.sum(weights_bkg)/np.sum(weights) )
+    #cuts = np.logical_and.reduce(cut_list)
+    #return np.minimum( max_val, weights*np.sum(weights_bkg[cuts])/np.sum(weights) )
+
+'''
 def reweight_sample(sample, bin_sizes, weight_type='X-S'):
     """ None   : no weights (weight=1)                    """
     """ X-S    : default cross-section weights            """
@@ -136,14 +221,19 @@ def reweight_sample(sample, bin_sizes, weight_type='X-S'):
     if 'OoD' in weight_type:
         sample['weights'][sig] = get_weights(sample, sig, bkg, bin_sizes, weight_type)
     return sample
-
-
-def get_weights(sample, sig, bkg, bin_sizes, weight_type, density=True):
+'''
+'''
+def get_weights(sample, sig, bkg, bin_sizes, weight_type, max_val=1e3, density=True):
     m_size, pt_size = bin_sizes['m'], bin_sizes['pt']
     m_sig, pt_sig, weights_sig = sample['m'][sig], sample['pt'][sig], sample['weights'][sig]
     m_bkg, pt_bkg, weights_bkg = sample['m'][bkg], sample['pt'][bkg], sample['weights'][bkg]
     m_min, pt_min = np.min(m_sig), np.min(pt_sig)
     m_max, pt_max = np.max(m_sig), np.max(pt_sig)
+    #if   'm'  in weight_type: cut_list = [ m_bkg>= m_min,  m_bkg<= m_max]
+    #elif 'pt' in weight_type: cut_list = [pt_bkg>=pt_min, pt_bkg<=pt_max]
+    #else                    : cut_list = [ m_bkg>= m_min,  m_bkg<= m_max] + [pt_bkg>=pt_min, pt_bkg<=pt_max]
+    #m_min, pt_min = min(m_min, np.min(m_bkg)), min(pt_min, np.min(pt_bkg))
+    #m_max, pt_max = max(m_max, np.max(m_bkg)), max(pt_max, np.max(pt_bkg))
     if 'm'  in weight_type: pt_size = pt_max+1
     if 'pt' in weight_type:  m_size =  m_max+1
     m_bins  = get_idx( m_max, bin_size= m_size, min_val= m_min, integer=False, tuples=False)
@@ -159,8 +249,10 @@ def get_weights(sample, sig, bkg, bin_sizes, weight_type, density=True):
     hist_bkg = np.histogram2d(m_bkg, pt_bkg, bins=[m_bins,pt_bins], weights=weights_bkg, density=density)[0]
     if density: hist_bkg *= len(m_bkg)
     weights = (hist_bkg/hist_sig)[m_idx, pt_idx]
-    return weights*np.sum(weights_bkg)/np.sum(weights)
-
+    return np.minimum( max_val, weights*np.sum(weights_bkg)/np.sum(weights) )
+    #cuts = np.logical_and.reduce(cut_list)
+    #return np.minimum( max_val, weights*np.sum(weights_bkg[cuts])/np.sum(weights) )
+'''
 
 def weights_factors(JZW, data_file):
     if np.all(JZW == -1) or np.all(JZW == 0):
@@ -264,25 +356,27 @@ def fit_scaler(sample, n_dims, scaler_out, reshape=False, scaler_type='RobustSca
         scaler = preprocessing.RobustScaler()
     scaler.fit(sample)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    print('Saving scaler to', scaler_out)
+    print('Saving scaler to', scaler_out, '\n')
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
-def apply_scaling(sample, n_dims, scaler, reshape, idx=(0,None), return_dict=None):
-    if idx == (0,None):
+def apply_scaling(sample, n_dims, scaler, reshape=False, verbose=False, idx=(0,None), return_dict=None):
+    if idx == (0,None) and verbose:
         print('Applying scaler', end=' ', flush=True); start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     sample = scaler.transform(sample)
     sample = np.reshape(sample, shape)
     if idx == (0,None):
-        print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+        if verbose:
+            print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
         return sample
     else: return_dict[idx] = sample
 def apply_scaler(sample, n_dims, scaler, reshape=False):
     print('Applying scaler', end=' ', flush=True); start_time = time.time()
     idx_tuples = get_idx(len(sample), mp.cpu_count())
     manager    = mp.Manager(); return_dict = manager.dict()
-    arguments  = [(sample[idx[0]:idx[1]], n_dims, scaler, reshape, idx, return_dict) for idx in idx_tuples]
+    arguments  = [(sample[idx[0]:idx[1]], n_dims, scaler, reshape, False, idx, return_dict)
+                  for idx in idx_tuples]
     processes  = [mp.Process(target=apply_scaling, args=arg) for arg in arguments]
     for task in processes: task.start()
     for task in processes: task.join()
@@ -361,7 +455,19 @@ def latent_loss(X_true, model):
     for idx in idx_tuples:
         model(X_true[idx[0]:idx[1]])
         X_latent += [model.losses[0].numpy()]
-    return np.concatenate(X_latent)
+    X_latent = np.concatenate(X_latent)
+    X_latent = np.where(np.isfinite(X_latent), X_latent, 0)
+    return X_latent
+
+
+def filtering(y_true, X_true, X_pred, sample):
+    #X_pred = tf.where(tf.math.is_finite(X_pred), X_pred, 0)
+    bad_idx = list(set(np.where(~np.isfinite(X_pred))[0]))
+    y_true  = np.delete(y_true, bad_idx, axis=0)
+    X_true  = np.delete(X_true, bad_idx, axis=0)
+    X_pred  = np.delete(X_pred, bad_idx, axis=0)
+    for key in sample: sample[key] = np.delete(sample[key], bad_idx, axis=0)
+    return y_true, X_true, X_pred, sample
 
 
 def get_idx(max_val, n_bins=10, bin_size=None, min_val=0, integer=True, tuples=True):

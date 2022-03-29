@@ -1,7 +1,7 @@
 import numpy             as np
 import multiprocessing   as mp
 import matplotlib.pyplot as plt
-import sys, os, warnings
+import os, sys, pickle, warnings
 from matplotlib    import pylab, ticker
 from sklearn       import metrics
 from scipy.spatial import distance
@@ -13,43 +13,40 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     print('\nPLOTTING RESULTS:')
     manager = mp.Manager(); X_losses = manager.dict()
     X_true_dict = {metric:X_true for metric in metrics if metric!='Latent'}
-    if False:
-        X_true_dict['Inputs'] = sample['constituents']
+    if False: X_true_dict['Inputs'] = sample['constituents']
     arguments = [(X_true_dict[metric], X_pred, n_dims, metric, X_losses) for metric in metrics if metric!='Latent']
     processes = [mp.Process(target=loss_function, args=arg) for arg in arguments]
     for job in processes: job.start()
     for job in processes: job.join()
     """ Adding latent space KLD metric and loss """
     if 'Latent' in metrics: X_losses['Latent'] = latent_loss(X_true, model)
-    bump_scan(y_true, X_losses[wp_metric], sample, sig_data, output_dir)
+    best_loss  = bump_scan(y_true, X_losses[wp_metric], wp_metric, sample, sig_data, output_dir)
     processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, wp_metric, output_dir)]
     processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
-    arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir) for metric in metrics]
+    arguments  = [(y_true, X_losses[metric], sample['weights'], metric, best_loss, output_dir) for metric in metrics]
     processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
     for job in processes: job.start()
     for job in processes: job.join()
 
 
-def bump_scan(y_true, X_loss, sample, sig_data, output_dir, n_cuts=200):
+def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=200):
     fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=sample['weights'])
-    step = 100/n_cuts
+    step    = 100/n_cuts
     tpr_val = np.append(np.arange(0,20,step), np.arange(20,100,step))
-    idx = np.minimum(np.searchsorted(100*tpr, tpr_val, side='right'), len(tpr)-1)
-    sample = {key:sample[key] for key in ['JZW','m','pt','weights']}
+    idx     = np.minimum(np.searchsorted(100*tpr, tpr_val, side='right'), len(tpr)-1)
+    sample  = {key:sample[key] for key in ['JZW','m','pt','weights']}
     global get_sigma
-    def get_sigma(sample, X_loss, losses, tpr, idx):
+    def get_sigma(sample, X_loss, losses, idx):
         cut_sample = {key:sample[key][X_loss>losses[idx]] for key in sample}
-        try:
-            sigma = bump_hunter(cut_sample, make_histo=False)
-            return tpr[idx], sigma, losses[idx]
-        except:
-            return None, None, None
+        try   : return bump_hunter(cut_sample, make_histo=False)
+        except: return None
     with mp.Pool() as pool:
-        pool_list = pool.map(partial(get_sigma, sample, X_loss, thresholds, 100*tpr), idx)
-    sig_eff, sigma, losses = zip(*list(pool_list))
-    sig_eff, sigma = [n for n in sig_eff if n!=None], [n for n in sigma if n!=None]
+        sigma = np.array(pool.map(partial(get_sigma, sample, X_loss, thresholds), idx))
+    sig_eff, losses = np.take(100*tpr, idx), np.take(thresholds, idx)
+    none_filter = sigma != np.array(None)
+    sig_eff, losses, sigma = sig_eff[none_filter], losses[none_filter], sigma[none_filter]
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     plt.plot(sig_eff, sigma, label='', color='tab:blue', lw=2, zorder=1)
     factor  = np.floor(np.log10(np.max(sigma)))
@@ -71,19 +68,19 @@ def bump_scan(y_true, X_loss, sample, sig_data, output_dir, n_cuts=200):
     file_name = output_dir+'/'+'BH_sigma.png'
     print('Saving max significance  to:', file_name); plt.savefig(file_name)
     """ Printing bkg suppression and bum hunting plots at maximum significance cut """
-    losses     = [n for n in losses if n!=None]
-    best_loss  = losses[np.argmax(sigma)]
-    cut_sample = {key:sample[key][X_loss>best_loss] for key in sample}
+    best_loss = {'metric':wp_metric, 'sig_eff':sig_eff[np.argmax(sigma)], 'loss':losses[np.argmax(sigma)]}
+    cut_sample = {key:sample[key][X_loss>best_loss['loss']] for key in sample}
     bump_hunter(cut_sample, output_dir, cut_type='best', print_info=False)
-    for var in ['m','pt']: plot_distributions([sample, cut_sample], output_dir, bin_sizes={'m':2.5,'pt':10},
-                                              plot_var=var, sig_tag=sig_data, file_name='BH_bkg_supp_'+var+'.png')
+    for var in ['m','pt']: plot_distributions([sample,cut_sample], sig_data, plot_var=var, bin_sizes={'m':2.5,'pt':10},
+                                              output_dir=output_dir, file_name='BH_bkg_supp_'+var+'.png')
+    return best_loss
 
 
-def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
-    min_dict = {'MSE':0  , 'MAE':0  , 'X-S'   :0  , 'JSD'   :0,   'EMD':0,
-                'KSD':0  , 'KLD':0  , 'Inputs':0  , 'Latent':0}
-    max_dict = {'MSE':0.001, 'MAE':0.05, 'X-S'   :0.5 , 'JSD'   :1, 'EMD':1,
-                'KSD':1.0  , 'KLD':0.5 , 'Inputs':0.02, 'Latent':20}
+def loss_distributions(y_true, X_loss, weights, metric, best_loss, output_dir, n_bins=100):
+    min_dict = {'MSE':0  , 'MAE':0   , 'X-S'   :0   , 'JSD'   :0, 'EMD':0,
+                'KSD':0  , 'KLD':0   , 'Inputs':0   , 'Latent':0}
+    max_dict = {'MSE':50 , 'MAE':0.05, 'X-S'   :0.5 , 'JSD'   :1, 'EMD':1,
+                'KSD':1.0, 'KLD':0.5 , 'Inputs':0.02, 'Latent':20}
     min_loss  = min_dict[metric]
     max_loss  = min(max_dict[metric], np.max(X_loss))
     bin_width = (max_loss-min_loss)/n_bins
@@ -94,8 +91,12 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
     for n in set(y_true):
         hist_weights  = weights[y_true==n]
         hist_weights *= 100/np.sum(hist_weights)/bin_width
-        pylab.hist(X_loss[y_true==n], bins, histtype='step', weights=hist_weights, label=labels[n],
-                   log=True if metric in ['DNN', 'FCN'] else False, color=colors[n], lw=2)
+        h = pylab.hist(X_loss[y_true==n], bins, histtype='step', weights=hist_weights, label=labels[n],
+                   log=True if metric in ['DNN','FCN'] else False, color=colors[n], lw=2)
+    if metric == best_loss['metric']:
+        axes.axvline(best_loss['loss'], ymin=0, ymax=1, ls='--', linewidth=1., color='dimgray')
+        plt.text(best_loss['loss']*1.02, axes.get_ylim()[1]*0.98, 'best cut',
+                 {'color':'dimgray', 'fontsize':10}, va="center", ha="left")
     pylab.xlim(min_dict[metric], max_loss)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     axes.tick_params(axis='both', which='major', labelsize=14)
@@ -107,6 +108,24 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, n_bins=100):
     if not os.path.isdir(output_dir): os.mkdir(output_dir)
     file_name = output_dir+'/'+metric+'_loss.png'
     print('Saving metric loss       to:', file_name); plt.savefig(file_name)
+
+
+def plot_history(output_dir, first_epoch=0, x_step=10):
+    losses = pickle.load(open(output_dir+'/'+'history.pkl', 'rb'))
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
+    epochs = np.arange(1+first_epoch, len(list(losses.values())[0])+1)
+    for key, loss in losses.items():
+        plt.plot(epochs, loss[first_epoch:], label=key, lw=2)
+    pylab.xlim(1, epochs[-1])
+    plt.xticks(np.append(1, np.arange(x_step, epochs[-1]+x_step, x_step)))
+    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator())
+    pylab.ylim(0, min(100, np.max(losses['Train loss'][1:])))
+    plt.xlabel('Epoch', fontsize=25)
+    plt.ylabel('Loss', fontsize=25)
+    axes.tick_params(axis='both', which='major', labelsize=14)
+    plt.legend(loc='upper right', fontsize=18)
+    file_name = output_dir+'/plots/'+'train_history.png'
+    print('Saving training history  to:', file_name); plt.savefig(file_name)
 
 
 def mass_distances(y_true, X_losses, X_mass, weights, metric, distances_dict, n_cuts=100):
@@ -190,12 +209,12 @@ def signal_gain(sample, cut_sample, output_dir, n_bins=50, m_range=(0,200)):
     print('Saving signal gain to:', file_name); plt.savefig(file_name)
 
 
-def plot_distributions(samples, output_dir, bin_sizes, plot_var, sig_tag, weight_type='None',
-                       normalize=False, density=True, log=True, file_name=''):
-    if   'top' in sig_tag: tag = r'$t\bar{t}$'
-    elif 'BSM' in sig_tag: tag = 'BSM'
-    elif 'OoD' in sig_tag: tag = 'OoD'
-    if 'OoD' in sig_tag: labels = {0:[tag,'QCD'], 1:[tag+' (weighted)','QCD (weighted)']}
+def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_name='', weight_type='None',
+                       normalize=True, density=True, log=True, plot_weights=False):
+    if   'top' in sig_data: tag = r'$t\bar{t}$'
+    elif 'BSM' in sig_data: tag = 'BSM'
+    elif 'OoD' in sig_data: tag = 'OoD'
+    if 'OoD' in sig_data: labels = {0:[tag,'QCD'], 1:[tag+' (weighted)','QCD (weighted)']}
     else: labels = {0:[tag,'QCD'], 1:[tag+' (cut)','QCD (cut)']}
     colors = ['tab:orange', 'tab:blue', 'tab:brown']; alphas = [1, 0.5]
     xlabel = {'pt':'$p_t$', 'm':'$m$', 'rljet_n_constituents':'Number of constituents'}[plot_var]
@@ -208,31 +227,42 @@ def plot_distributions(samples, output_dir, bin_sizes, plot_var, sig_tag, weight
             if not np.any(condition): continue
             variable = np.float32(sample[plot_var][condition])
             weights = sample['weights'][condition]
-            if 'flat' in weight_type: min_val, max_val = max(0, np.min(variable)), np.max(variable)
-            else: min_val, max_val = max(0, np.min(sample[plot_var])), np.max(sample[plot_var])
+            if 'flat' in weight_type: min_val, max_val = max(0, np.min(variable))        , np.max(variable        )
+            else                    : min_val, max_val = max(0, np.min(sample[plot_var])), np.max(sample[plot_var])
             bins = get_idx(max_val, bin_size=bin_sizes[plot_var], min_val=min_val, integer=False, tuples=False)
+            if plot_weights:
+                ''' Printing weights histogram '''
+                pylab.hist(weights, bins=np.arange(40000), histtype='step', color=colors[m],
+                           lw=2, log=log, alpha=alphas[n], label=labels[n][m])
+                continue
             if normalize:
-                weights *= 100/(np.sum(sample['weights'])) #100/(np.sum(weights))
+                if weight_type == 'None': weights *= 100/(np.sum(samples[0]['weights']))
+                else                    : weights *= 100/(np.sum(sample    ['weights'])) #100/(np.sum(weights))
             if density:
                 indices  = np.searchsorted(bins, variable, side='right')
                 weights /= np.take(np.diff(bins), np.minimum(indices, len(bins)-1)-1)
             pylab.hist(variable, bins, histtype='step', weights=weights, color=colors[m],
                        lw=2, log=log, alpha=alphas[n], label=labels[n][m])
-    if 'OoD' in sig_tag:
+    if not density or plot_weights:
+        pass
+    elif 'OoD' in sig_data:
         if   plot_var == 'm' : pylab.xlim(0, 1200); pylab.ylim(1e0, 1e5)
         elif plot_var == 'pt': pylab.xlim(0, 3000); pylab.ylim(1e0, 1e5)
-    elif 'Geneva' in sig_tag:
+    elif 'Geneva' in sig_data:
         if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e-2, 1e5)
         elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e-2, 1e5)
     else:
-        if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e0, 1e7)
-        elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e0, 1e7)
+        if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e0, 1e6)
+        elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e0, 1e6)
+    if normalize:
+        if   plot_var == 'm' : pylab.ylim(1e-6, 1e0)
+        elif plot_var == 'pt': pylab.ylim(1e-6, 1e0)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if not log: axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     plt.xlabel(xlabel+' (GeV)', fontsize=24)
     y_label = ' density' if density else ''
     if normalize: y_label += ' (%)'
-    elif sig_tag in ['top-UFO','BSM']: y_label += ' ('+r'58.5 fb$^{-1}$'+')'
+    elif sig_data in ['top-UFO','BSM']: y_label += ' ('+r'58.5 fb$^{-1}$'+')'
     plt.ylabel('Distribution' + y_label, fontsize=24)
     axes.tick_params(axis='both', which='major', labelsize=14)
     plt.legend(loc='upper right', ncol=1 if len(samples)==1 else 2, fontsize=18)
