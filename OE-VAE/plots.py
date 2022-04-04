@@ -24,7 +24,7 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, wp_metric, output_dir)]
     processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
-    arguments  = [(y_true, X_losses[metric], sample['weights'], metric, best_loss, output_dir) for metric in metrics]
+    arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir, best_loss) for metric in metrics]
     processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
     for job in processes: job.start()
@@ -76,33 +76,50 @@ def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=20
     return best_loss
 
 
-def loss_distributions(y_true, X_loss, weights, metric, best_loss, output_dir, n_bins=100):
-    min_dict = {'MSE':0  , 'MAE':0   , 'X-S'   :0   , 'JSD'   :0, 'EMD':0,
-                'KSD':0  , 'KLD':0   , 'Inputs':0   , 'Latent':0}
-    max_dict = {'MSE':50 , 'MAE':0.05, 'X-S'   :0.5 , 'JSD'   :1, 'EMD':1,
-                'KSD':1.0, 'KLD':0.5 , 'Inputs':0.02, 'Latent':20}
-    min_loss  = min_dict[metric]
-    max_loss  = min(max_dict[metric], np.max(X_loss))
-    bin_width = (max_loss-min_loss)/n_bins
-    bins      = list(np.arange(min_loss, max_loss, bin_width)) + [max_loss]
-    labels    = [r'$t\bar{t}$ jets', 'QCD jets']; colors = ['tab:orange', 'tab:blue']
+def loss_distributions(y_true, X_loss, weights, metric, output_dir, best_loss=None, n_bins=100,
+                       normalize=True, density=True, log=True):
+    if log:
+        x_lim = 1e-2, 1e4
+        y_lim = 1e-3, 1e4
+        bins  = np.logspace(np.log10(x_lim[0]), np.log10(x_lim[1]), num=n_bins)
+    else:
+        min_dict = {'MSE':0  , 'MAE':0   , 'X-S'   :0   , 'JSD'   :0, 'EMD':0,
+                    'KSD':0  , 'KLD':0   , 'Inputs':0   , 'Latent':0}
+        max_dict = {'MSE':50 , 'MAE':0.05, 'X-S'   :0.5 , 'JSD'   :1, 'EMD':1,
+                    'KSD':1.0, 'KLD':0.5 , 'Inputs':0.02, 'Latent':20}
+        min_loss  = min_dict[metric]
+        max_loss  = min(max_dict[metric], np.max(X_loss))
+        bin_width = (max_loss-min_loss)/n_bins
+        bins      = list(np.arange(min_loss, max_loss, bin_width)) + [max_loss]
+    labels = [r'$t\bar{t}$', 'QCD']; colors = ['tab:orange', 'tab:blue']
     if np.any(weights) == None: weights = np.array(len(y_true)*[1.])
-    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
+    plt.figure(figsize=(13,8)); pylab.grid(True); ax = plt.gca()
     for n in set(y_true):
-        hist_weights  = weights[y_true==n]
-        hist_weights *= 100/np.sum(hist_weights)/bin_width
-        h = pylab.hist(X_loss[y_true==n], bins, histtype='step', weights=hist_weights, label=labels[n],
+        variable     = X_loss [y_true==n]
+        hist_weights = weights[y_true==n]
+        if normalize:
+            hist_weights *= 100/np.sum(hist_weights)
+        if density:
+            indices       = np.searchsorted(bins, variable, side='right')
+            hist_weights /= np.take(np.diff(bins), np.minimum(indices, len(bins)-1)-1)
+        pylab.hist(variable, bins, histtype='step', weights=hist_weights, label=labels[n],
                    log=True if metric in ['DNN','FCN'] else False, color=colors[n], lw=2)
-    if metric == best_loss['metric']:
-        axes.axvline(best_loss['loss'], ymin=0, ymax=1, ls='--', linewidth=1., color='dimgray')
-        plt.text(best_loss['loss']*1.02, axes.get_ylim()[1]*0.98, 'best cut',
-                 {'color':'dimgray', 'fontsize':10}, va="center", ha="left")
-    pylab.xlim(min_dict[metric], max_loss)
-    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
-    axes.tick_params(axis='both', which='major', labelsize=14)
-    label = 'KLD latent loss' if metric=='Latent' else metric+' reconstruction loss'
+    if log: pylab.xlim(x_lim); pylab.ylim(y_lim)
+    else  : pylab.xlim(min_dict[metric], max_loss)
+    if best_loss is not None and metric == best_loss['metric']:
+        ax.axvline(best_loss['loss'], ymin=0, ymax=1, ls='--', linewidth=1., color='black')
+        if log:
+            x_pos = (np.log10(best_loss['loss'])-np.log10(x_lim[0]))/(np.log10(x_lim[1])-np.log10(x_lim[0]))
+        else:
+            x_pos = (best_loss['loss']-ax.get_xlim()[0])/(ax.get_xlim()[1]-ax.get_xlim()[0])
+        plt.text(x_pos, 1.01, format(best_loss['loss'],'.2f'), {'color':'black', 'fontsize':10},
+                 va="center", ha="center", transform=ax.transAxes,)
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    if log: plt.xscale('log'); plt.yscale('log')
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    label = 'KLD Latent Loss' if metric=='Latent' else metric+' Reconstruction Loss'
     plt.xlabel(label, fontsize=24)
-    plt.ylabel('Distribution density (%)', fontsize=24)
+    plt.ylabel('Distribution Density (%)', fontsize=24)
     plt.legend(loc='upper right', fontsize=18)
     output_dir += '/'+'metrics_losses'
     if not os.path.isdir(output_dir): os.mkdir(output_dir)
@@ -110,8 +127,8 @@ def loss_distributions(y_true, X_loss, weights, metric, best_loss, output_dir, n
     print('Saving metric loss       to:', file_name); plt.savefig(file_name)
 
 
-def plot_history(output_dir, first_epoch=0, x_step=10):
-    losses = pickle.load(open(output_dir+'/'+'history.pkl', 'rb'))
+def plot_history(hist_file, output_dir, first_epoch=0, x_step=10):
+    losses = pickle.load(open(hist_file, 'rb'))
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     epochs = np.arange(1+first_epoch, len(list(losses.values())[0])+1)
     for key, loss in losses.items():
@@ -119,7 +136,7 @@ def plot_history(output_dir, first_epoch=0, x_step=10):
     pylab.xlim(1, epochs[-1])
     plt.xticks(np.append(1, np.arange(x_step, epochs[-1]+x_step, x_step)))
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator())
-    pylab.ylim(0, min(100, np.max(losses['Train loss'][1:])))
+    pylab.ylim(0, min(50, np.max(losses['Train loss'][1:])))
     plt.xlabel('Epoch', fontsize=25)
     plt.ylabel('Loss', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=14)
@@ -286,6 +303,7 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
                  {'color':colors_dict[metric], 'fontsize':14}, va='center', ha='right', transform=axes.transAxes)
         plt.plot(100*tpr[len_0:], 1/fpr[len_0:], label=metric, lw=2, color=colors_dict[metric])
     metrics_scores = [[metrics_dict[metric][key] for key in ['fpr','tpr']] for metric in metrics_list]
+    pylab.xlim(0,100); pylab.ylim(1,1e6)
     for wp in wps:
         fpr_list = np.array([fpr[np.argwhere(100*tpr >= wp)[0]] for fpr,tpr in metrics_scores])
         if np.all(fpr_list > 1e-4):
@@ -293,12 +311,13 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
             color = colors_dict[metrics_list[np.argmin(fpr_list)]]
             axes.axhline(score, xmin=wp/100, xmax=1, ls='--', linewidth=1., color='dimgray')
             plt.text(100.4, score, str(int(score)), {'color':color, 'fontsize':14}, va="center", ha="left")
-            axes.axvline(wp, ymin=0, ymax=np.log(score)/np.log(1e4), ls='--', linewidth=1., color='dimgray')
-    pylab.xlim(0,100)
-    pylab.ylim(1,1e4)
+            axes.axvline(wp, ymin=0, ymax=np.log(score)/np.log(axes.get_ylim()[1]),
+                         ls='--', linewidth=1., color='dimgray')
     plt.yscale('log')
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
-    plt.yticks([10**int(n) for n in np.arange(0,5)], ['1','$10^1$','$10^2$','$10^3$','$10^4$'])
+    pos    = [10**int(n) for n in np.arange(0,int(np.log10(axes.get_ylim()[1]))+1)]
+    labels = ['1'] + ['$10^{'+str(n)+'}$' for n in np.arange(1,int(np.log10(axes.get_ylim()[1]))+1)]
+    plt.yticks(pos, labels)
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('$1/\epsilon_{\operatorname{bkg}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=14)

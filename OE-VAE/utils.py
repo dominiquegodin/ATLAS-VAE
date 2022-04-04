@@ -200,59 +200,6 @@ def get_weights(bkg_sample, sig_sample, bin_sizes, weight_type, max_val=1e3, den
     #cuts = np.logical_and.reduce(cut_list)
     #return np.minimum( max_val, weights*np.sum(weights_bkg[cuts])/np.sum(weights) )
 
-'''
-def reweight_sample(sample, bin_sizes, weight_type='X-S'):
-    """ None   : no weights (weight=1)                    """
-    """ X-S    : default cross-section weights            """
-    """ flat_m : 1D flat weighting for OoD and background """
-    """ flat_pt: 1D flat weighting for OoD and background """
-    """ flat_2d: 2D flat weighting for OoD and background """
-    """ OoD_m  : 1D weighting of OoD to background        """
-    """ OoD_pt : 1D weighting of OoD to background        """
-    """ OoD_2d : 2D weighting of OoD to background        """
-    sig, bkg = sample['JZW']==-1, sample['JZW']>=0
-    if weight_type == None or weight_type.lower() == 'none':
-        sample['weights'][sig] = np.ones_like(sample['weights'][sig])
-        sample['weights'][bkg] = np.ones_like(sample['weights'][bkg])
-    if 'flat' in weight_type:
-        sample['weights'][sig] = get_weights(sample, sig, bkg, bin_sizes, weight_type)
-        sample['weights'][bkg] = get_weights(sample, bkg, bkg, bin_sizes, weight_type)
-        sample['weights'][sig] = get_weights(sample, sig, bkg, bin_sizes, weight_type='2d')
-    if 'OoD' in weight_type:
-        sample['weights'][sig] = get_weights(sample, sig, bkg, bin_sizes, weight_type)
-    return sample
-'''
-'''
-def get_weights(sample, sig, bkg, bin_sizes, weight_type, max_val=1e3, density=True):
-    m_size, pt_size = bin_sizes['m'], bin_sizes['pt']
-    m_sig, pt_sig, weights_sig = sample['m'][sig], sample['pt'][sig], sample['weights'][sig]
-    m_bkg, pt_bkg, weights_bkg = sample['m'][bkg], sample['pt'][bkg], sample['weights'][bkg]
-    m_min, pt_min = np.min(m_sig), np.min(pt_sig)
-    m_max, pt_max = np.max(m_sig), np.max(pt_sig)
-    #if   'm'  in weight_type: cut_list = [ m_bkg>= m_min,  m_bkg<= m_max]
-    #elif 'pt' in weight_type: cut_list = [pt_bkg>=pt_min, pt_bkg<=pt_max]
-    #else                    : cut_list = [ m_bkg>= m_min,  m_bkg<= m_max] + [pt_bkg>=pt_min, pt_bkg<=pt_max]
-    #m_min, pt_min = min(m_min, np.min(m_bkg)), min(pt_min, np.min(pt_bkg))
-    #m_max, pt_max = max(m_max, np.max(m_bkg)), max(pt_max, np.max(pt_bkg))
-    if 'm'  in weight_type: pt_size = pt_max+1
-    if 'pt' in weight_type:  m_size =  m_max+1
-    m_bins  = get_idx( m_max, bin_size= m_size, min_val= m_min, integer=False, tuples=False)
-    pt_bins = get_idx(pt_max, bin_size=pt_size, min_val=pt_min, integer=False, tuples=False)
-    m_idx   = np.clip(np.digitize( m_sig,  m_bins, right=False), 1, len( m_bins)-1) - 1
-    pt_idx  = np.clip(np.digitize(pt_sig, pt_bins, right=False), 1, len(pt_bins)-1) - 1
-    hist_sig = np.histogram2d(m_sig, pt_sig, bins=[m_bins,pt_bins], density=density)[0]
-    if density: hist_sig *= len(m_sig)
-    hist_sig = np.maximum(hist_sig, np.min(hist_sig[hist_sig!=0]) if density else 1)
-    if 'flat' in weight_type:
-        weights = (1/hist_sig)[m_idx, pt_idx]
-        return weights*np.sum(weights_sig)/np.sum(weights)
-    hist_bkg = np.histogram2d(m_bkg, pt_bkg, bins=[m_bins,pt_bins], weights=weights_bkg, density=density)[0]
-    if density: hist_bkg *= len(m_bkg)
-    weights = (hist_bkg/hist_sig)[m_idx, pt_idx]
-    return np.minimum( max_val, weights*np.sum(weights_bkg)/np.sum(weights) )
-    #cuts = np.logical_and.reduce(cut_list)
-    #return np.minimum( max_val, weights*np.sum(weights_bkg[cuts])/np.sum(weights) )
-'''
 
 def weights_factors(JZW, data_file):
     if np.all(JZW == -1) or np.all(JZW == 0):
@@ -345,7 +292,7 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
     else: return loss
 
 
-def fit_scaler(sample, n_dims, scaler_out, reshape=False, scaler_type='RobustScaler'):
+def fit_scaler(sample, n_dims, scaler_out, reshape=False, scaler_type='QuantileTransformer'):
     print('\nFitting', scaler_type, 'scaler', end=' ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     if scaler_type == 'QuantileTransformer':
@@ -381,7 +328,7 @@ def apply_scaler(sample, n_dims, scaler, reshape=False):
     for task in processes: task.start()
     for task in processes: task.join()
     sample = np.concatenate([return_dict[idx] for idx in idx_tuples])
-    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)\n')
     return sample
 def inverse_scaler(sample, n_dims, scaler, reshape=False):
     print('Applying inverse scaler', end=' ', flush=True); start_time = time.time()
@@ -450,7 +397,7 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,300], bins=50
 
 
 def latent_loss(X_true, model):
-    idx_tuples = get_idx(len(X_true), bin_size=1e6)
+    idx_tuples = get_idx(len(X_true), bin_size=1e5)
     X_latent = []
     for idx in idx_tuples:
         model(X_true[idx[0]:idx[1]])
