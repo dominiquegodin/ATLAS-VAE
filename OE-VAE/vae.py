@@ -10,8 +10,8 @@ from   sklearn   import utils
 from   copy      import deepcopy
 from   models    import VariationalAutoEncoder, train_model
 from   utils     import load_data, make_sample, Batch_Generator, fit_scaler, apply_scaler
-from   utils     import get_file, apply_best_cut, bump_hunter, filtering
-from   plots     import plot_distributions, plot_results, plot_history
+from   utils     import get_file, apply_best_cut, bump_hunter, filtering, grid_search
+from   plots     import sample_distributions, plot_distributions, plot_results, plot_history
 
 
 # PROGRAM ARGUMENTS
@@ -41,7 +41,10 @@ parser.add_argument( '--scaling'       , default = 'ON'                         
 parser.add_argument( '--plotting'      , default = 'OFF'                               )
 parser.add_argument( '--apply_cut'     , default = 'OFF'                               )
 parser.add_argument( '--bump_hunter'   , default = 'OFF'                               )
+parser.add_argument( '--array_id'      , default = 0            , type = int           )
 args = parser.parse_args()
+#args.n_const         = grid_search(n_const=[20, 40, 60, 80, 100]             )[args.array_id]
+#args.beta, args.lamb = grid_search(beta=[0, 0.1, 1, 10], lamb=[0, 1, 10, 100])[args.array_id]
 for key in ['n_train', 'n_valid', 'n_OoD', 'n_sig', 'batch_size']: vars(args)[key] = int(vars(args)[key])
 
 
@@ -55,7 +58,8 @@ print('\nPROGRAM ARGUMENTS:\n'+tabulate(vars(args).items(), tablefmt='psql'))
 
 
 # SAMPLES CUTS
-gen_cuts = ['(sample["pt"] >=    0)'] + ['(sample["weights"] <= 200)'] #+ ['(sample["m"] >= 30)']
+gen_cuts = ['(sample["pt"] >=    0)'] + ['(sample["weights"] <= 200)']
+#gen_cuts = ['(sample["m" ] <=  200) | (sample["m"] >= 400)'] + gen_cuts
 bkg_cuts = ['(sample["pt"] <= 3000)'] + gen_cuts
 OoD_cuts = ['(sample["pt"] <= 3000)'] + gen_cuts
 sig_cuts = ['(sample["pt"] <= 3000)'] + gen_cuts
@@ -100,15 +104,10 @@ if args.n_epochs > 0:
     bin_sizes = {'m':10,'pt':20} if args.weight_type.split('_')[0] in ['flat','OoD'] else {'m':10,'pt':20}
     train_sample = Batch_Generator(bkg_data, OoD_data, args.n_train, args.n_OoD, bkg_cuts, OoD_cuts,
                                    args.n_const, args.n_dims, args.weight_type, bin_sizes, scaler)
-
     plot_sample = train_sample[0]
     plot_sample = {key:np.concatenate([plot_sample[0][key], plot_sample[1][key]])
                    for key in ['m', 'pt', 'weights', 'JZW']}
-    processes = [mp.Process(target=plot_distributions, args=(plot_sample, OoD_data, var, bin_sizes,
-                 args.output_dir+'/'+'plots', var+'_train.png', args.weight_type)) for var in ['m','pt']]
-    for job in processes: job.start()
-    for job in processes: job.join()
-
+    sample_distributions(plot_sample, OoD_data, args.output_dir, 'train', args.weight_type, bin_sizes)
     valid_sample = Batch_Generator(bkg_data, OoD_data, args.n_valid, args.n_OoD, bkg_cuts, OoD_cuts,
                                    args.n_const, args.n_dims, args.weight_type, bin_sizes, scaler)
     train_model(model, train_sample, valid_sample, args.OE_type, args.n_epochs, args.batch_size,
@@ -118,7 +117,7 @@ if args.n_epochs > 0:
 
 # MODEL PREDICTIONS ON VALIDATION DATA
 if args. plotting == 'OFF' and args.apply_cut == 'OFF': sys.exit()
-print('\n+'+30*'-'+'+\n+--- VALIDATION SAMPLE EVALUATION ---+\n+'+30*'-'+'+')
+print('\n+'+36*'-'+'+\n+--- VALIDATION SAMPLE EVALUATION ---+\n+'+36*'-'+'+')
 #DSIDs: 302321,310464,449929,450282,450283,450284
 sample = make_sample(bkg_data, sig_data, args.n_valid, args.n_sig, bkg_cuts, sig_cuts,
                      args.n_const, args.n_dims, DSIDs=None, adjust_weights=True)
@@ -126,8 +125,7 @@ sample = make_sample(bkg_data, sig_data, args.n_valid, args.n_sig, bkg_cuts, sig
 y_true = np.where(sample['JZW']==-1, 0, 1)
 """ Adjusting signal weights (Delphes samples)"""
 if sig_data == 'top-Geneva': sample['weights'][y_true==0] /= 1e3
-#for var in ['m','pt']: plot_distributions(sample, sig_data, plot_var=var, bin_sizes={'m':2.5,'pt':10},
-#                                          args.output_dir+'/plots', file_name=var+'_valid.png')
+#sample_distributions(sample,sig_data, args.output_dir, 'valid')
 if scaler is not None: X_true = apply_scaler(sample['constituents'], args.n_dims, scaler)
 else                 : X_true =              sample['constituents']
 X_true = tf.cast(X_true, tf.float64)
@@ -146,13 +144,13 @@ wp_metric = 'Latent' if (args.OE_type=='KLD' and 'Latent' in metrics) else 'MSE'
 if args.apply_cut == 'ON' or args.bump_hunter == 'ON':
     for cut_type in ['gain', 'sigma']:
         cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, args.n_dims, model, wp_metric, cut_type)
-        if args.bump_hunter == 'ON': bump_hunter(cut_sample, args.output_dir+'/plots', cut_type)
+        if args.bump_hunter == 'ON': bump_hunter(cut_sample, args.output_dir, cut_type)
         plot_distributions([sample,cut_sample], sig_data, plot_var='m', bin_sizes={'m':2.5,'pt':10},
-                           output_dir=args.output_dir+'/plots', file_name='bkg_supp-'+cut_type+'.png')
+                           output_dir=args.output_dir, file_name='bkg_supp-'+cut_type+'.png')
 
 
 # PLOTTING RESULTS
 if args.plotting == 'ON':
     plot_results(y_true, X_true, X_pred, sample, args.n_dims, model,
-                 metrics, wp_metric, sig_data, args.output_dir+'/plots')
+                 metrics, wp_metric, sig_data, args.output_dir)
     if os.path.isfile(args.hist_file): plot_history(args.hist_file, args.output_dir)

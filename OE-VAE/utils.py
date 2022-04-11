@@ -1,14 +1,22 @@
 import numpy           as np
 import tensorflow      as tf
 import multiprocessing as mp
-import os, sys, h5py, time, pickle, warnings
+import os, sys, h5py, time, pickle, warnings, itertools
 from   sklearn       import preprocessing, metrics, utils
 from   scipy.spatial import distance
 from   scipy         import stats
 from   energyflow    import emd
 
 
-def get_file(data_type, data_path  = '/opt/tmp/godin/AD_data' ):
+def grid_search(**kwargs):
+    if len(kwargs.items()) <= 1: array_tuple = list(kwargs.values())[0]
+    else                       : array_tuple = list(itertools.product(*kwargs.values()))
+    return dict( zip(np.arange(len(array_tuple)), array_tuple) )
+
+
+def get_file(data_type, host_name='atlas'):
+    if 'atlas'  in host_name: data_path = '/opt/tmp/godin/AD_data'
+    if 'beluga' in host_name: data_path = '/project/def-arguinj/shared/AD_data'
     data_files = {'qcd-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M.h5'      ,
                   'top-Geneva' :'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5',
                   'qcd-Delphes':'Delphes_dijet.h5'   ,
@@ -292,7 +300,7 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
     else: return loss
 
 
-def fit_scaler(sample, n_dims, scaler_out, reshape=False, scaler_type='QuantileTransformer'):
+def fit_scaler(sample, n_dims, scaler_out, reshape=False, scaler_type='RobustScaler'):
     print('\nFitting', scaler_type, 'scaler', end=' ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     if scaler_type == 'QuantileTransformer':
@@ -385,7 +393,7 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,300], bins=50
     hunter = BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
                           npe=1000, nworker=1, seed=0, bins=bin_edges)
     hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=make_histo and print_info)
-    filename = None if output_dir==None else output_dir+'/'+'BH_'+cut_type+'.png'
+    filename = None if output_dir==None else output_dir+'/plots/'+'BH_'+cut_type+'.png'
     if make_histo: print('Saving bump hunting plot to:', filename)
     max_sig = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
     if make_histo and print_info:

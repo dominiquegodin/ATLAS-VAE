@@ -176,13 +176,8 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
         print('(', '\b' + format(time.time() - start_time, '.1f'), '\b' + 's)')
         for key in history: history[key] += [losses[key].numpy() if key in losses else 0]
         if epoch > 0: optimizer, count = model_checkpoint(vae, optimizer, history, model_out, count)
+        else        : vae.save_weights(model_out)
         if hist_file is not None: pickle.dump(history, open(hist_file,'wb'))
-
-
-def clip_values(array, max_val=np.inf):
-    array = tf.where(tf.math.is_finite(array), array, 0)
-    array = tf.clip_by_value(array, -max_val, max_val)
-    return array
 
 
 def model_checkpoint(vae, optimizer, history, model_out, count, metric='Train loss', patience=3, factor=2):
@@ -198,6 +193,12 @@ def model_checkpoint(vae, optimizer, history, model_out, count, metric='Train lo
         optimizer.learning_rate = optimizer.learning_rate/factor
         print(optimizer.learning_rate.numpy()); count = 0
     return optimizer, count
+
+
+def clip_values(array, max_val=np.inf):
+    array = tf.where(tf.math.is_finite(array), array, 0)
+    array = tf.clip_by_value(array, -max_val, max_val)
+    return array
 
 
 def find_nearest(value, array):
