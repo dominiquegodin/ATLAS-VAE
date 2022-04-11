@@ -4,9 +4,9 @@
 # SLURM OPTIONS (LPS or BELUGA)
 #---------------------------------------------------------------------
 #SBATCH --account=def-arguinj
-#SBATCH --time=00-03:00         #time limit (DD-HH:MM)
-##SBATCH --mem=128G              #memory per node (Beluga)
-##SBATCH --cpus-per-task=4       #CPUs threads per node (Beluga)
+#SBATCH --time=00-02:00         #time limit (DD-HH:MM)
+##SBATCH --mem=64G               #memory per node (Beluga)
+##SBATCH --cpus-per-task=8       #CPUs threads per node (Beluga)
 #SBATCH --gres=gpu:1            #GPUs per node
 #SBATCH --job-name=OE_VAE
 #SBATCH --output=%x_%A_%a.out
@@ -29,8 +29,8 @@ then
     singularity shell --nv --bind $PATHS $SIF vae.sh $ARRAY_ID $HOST_NAME
 else
     # TRAINING ON BELUGA
-    module load singularity/2.6
-    PATHS=/project/def-arguinj,$NODE_DIR
+    module load singularity/3.7
+    PATHS=/project/def-arguinj
     SIF=/project/def-arguinj/shared/sing_images/tf-2.1.0-gpu-py3_sing-2.6.sif
     singularity shell --nv --bind $PATHS $SIF < vae.sh $ARRAY_ID $HOST_NAME
 fi
