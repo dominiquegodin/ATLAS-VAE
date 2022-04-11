@@ -43,8 +43,10 @@ parser.add_argument( '--apply_cut'     , default = 'OFF'                        
 parser.add_argument( '--bump_hunter'   , default = 'OFF'                               )
 parser.add_argument( '--array_id'      , default = 0            , type = int           )
 args = parser.parse_args()
-#args.n_const         = grid_search(n_const=[20, 40, 60, 80, 100]             )[args.array_id]
+#args.n_const = grid_search(n_const=[20, 40, 60, 80, 100]             )[args.array_id]
+#args.output_dir += '/n_const'+str(int(args.n_const))
 #args.beta, args.lamb = grid_search(beta=[0, 0.1, 1, 10], lamb=[0, 1, 10, 100])[args.array_id]
+#args.output_dir += '/beta'+str(int(args.beta))+'_lamb'+str(int(args.lamb))
 for key in ['n_train', 'n_valid', 'n_OoD', 'n_sig', 'batch_size']: vars(args)[key] = int(vars(args)[key])
 
 
