@@ -1,12 +1,10 @@
 source setup.sh
 
-
 # SIGNAL SAMPLES
 # COMMAND LINE: sbatch -w atlas16 sbatch.sh
 #python root2h5.py --sample_type=topo-ttbar
 #python root2h5.py --sample_type=UFO-ttbar
 #python root2h5.py --sample_type=BSM
-
 
 # BACKGROUND SAMPLES
 # COMMAND LINE: sbatch -w atlas16 --array=0-9%1 sbatch.sh

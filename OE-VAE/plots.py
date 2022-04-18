@@ -6,11 +6,11 @@ from matplotlib    import pylab, ticker
 from sklearn       import metrics
 from scipy.spatial import distance
 from functools     import partial
-from utils         import loss_function, inverse_scaler, get_4v, bump_hunter, latent_loss, get_idx
+from utils         import loss_function, latent_loss, inverse_scaler, get_4v, bump_hunter, get_idx
 
 
 def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metric, sig_data, output_dir):
-    print('\nPLOTTING RESULTS:')
+    print('\nPLOTTING PERFORMANCE RESULTS:')
     manager = mp.Manager(); X_losses = manager.dict()
     X_true_dict = {metric:X_true for metric in metrics if metric!='Latent'}
     if False: X_true_dict['Inputs'] = sample['constituents']
@@ -31,6 +31,27 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     for job in processes: job.join()
 
 
+def apply_cuts(y_true, X_true, X_pred, sample, n_dims, model, metric, sig_data, cut_types, output_dir):
+    print('APPLYING CUTS ON SAMPLES:')
+    def plot_suppression(sample, sig_data, X_loss, positive_rates, bkg_eff=None, file_name=None):
+        cut_sample = make_cut(y_true, X_loss, sample, positive_rates, metric, cut_type, bkg_eff)
+        if file_name is None: file_name  = 'bkg_suppression/blg_eff_' + format(bkg_eff,'1.0e')
+        sample_distributions([sample,cut_sample], sig_data, output_dir, file_name)
+    if not os.path.isdir(output_dir+'/bkg_suppression'): os.mkdir(output_dir+'/bkg_suppression')
+    if metric == 'Latent': X_loss = latent_loss(X_true, model)
+    else                 : X_loss = loss_function(X_true, X_pred, n_dims, metric, multiloss=False)
+    positive_rates = get_rates(y_true, X_loss, sample['weights'])
+    for cut_type in cut_types:
+        if cut_type == 'bkg_eff':
+            processes = [mp.Process(target=plot_suppression, args=(sample, sig_data, X_loss, positive_rates,
+                         bkg_eff)) for bkg_eff in [1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]]
+            for job in processes: job.start()
+            for job in processes: job.join()
+        if cut_type in ['gain','sigma']:
+            file_name = 'bkg_suppression/best_' + cut_type
+            plot_suppression(sample, sig_data, X_loss, positive_rates, file_name=file_name)
+
+
 def sample_distributions(sample, OoD_data, output_dir, name, weight_type='None', bin_sizes={'m':2.5,'pt':10}):
     processes = [mp.Process(target=plot_distributions, args=(sample, OoD_data, var, bin_sizes,
                  output_dir, name+'_'+var+'.png', weight_type)) for var in ['m','pt']]
@@ -38,10 +59,43 @@ def sample_distributions(sample, OoD_data, output_dir, name, weight_type='None',
     for job in processes: job.join()
 
 
-def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=20, eff_type='bkg'):
-    fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=sample['weights'])
+def get_rates(y_true, X_loss, weights, metric=None, return_dict=None):
+    fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
     fpr_0 = np.sum(fpr==0)
     fpr, tpr, thresholds = 100*fpr[fpr_0:], 100*tpr[fpr_0:], thresholds[fpr_0:]
+    if return_dict is None: return                fpr, tpr, thresholds
+    else                  : return_dict[metric] = fpr, tpr, thresholds
+
+
+def best_threshold(y_true, positive_rates, weights, cut_type, min_tpr=1):
+    fpr, tpr, thresholds = positive_rates
+    fpr, tpr, thresholds = fpr[tpr>min_tpr], tpr[tpr>min_tpr], thresholds[tpr>min_tpr]
+    if cut_type=='gain':
+        cut_values = tpr/fpr
+        factor = 1
+    if cut_type=='sigma':
+        cut_values = tpr/np.sqrt(fpr)
+        n_sig  = np.sum(weights[y_true==0])
+        n_bkg  = np.sum(weights[y_true==1])
+        factor = n_sig/np.sqrt(n_bkg)/10
+    cut_index = np.argmax(cut_values)
+    return thresholds[cut_index], cut_values[cut_index] * factor
+
+
+def make_cut(y_true, X_loss, sample, positive_rates, metric, cut_type, bkg_eff=None):
+    if bkg_eff is None:
+        loss_cut, loss_val = best_threshold(y_true, positive_rates, sample['weights'], cut_type)
+        print('Best', metric, 'cut on '+format(cut_type,'5s')+':', metric, '>=', end= ' ')
+        print(format(loss_cut, '.3f')+' / best '+format(cut_type,'5s'), '=', format(loss_val, '>5.2f'))
+    else:
+        fpr, tpr, thresholds = positive_rates
+        cut_idx  = np.argmin(abs(fpr-bkg_eff))
+        loss_cut = thresholds[cut_idx]
+    return {key:sample[key][X_loss>loss_cut] for key in sample}
+
+
+def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=20, eff_type='bkg'):
+    fpr, tpr, thresholds = get_rates(y_true, X_loss, sample['weights'])
     if eff_type == 'sig':
         eff = tpr
         x_min, x_max = 10*np.floor(tpr[0]/10), 100
@@ -91,7 +145,7 @@ def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=20
         plt.xticks(pos, labels)
     axes.axhline(max_val, xmin=xmin, xmax=1, ls='--', linewidth=1., color='dimgray')
     plt.ylabel('Significance', fontsize=25)
-    file_name = output_dir+'/plots/'+'BH_sigma.png'
+    file_name = output_dir+'/'+'BH_sigma.png'
     print('Saving max significance  to:', file_name); plt.savefig(file_name)
     """ Printing bkg suppression and bum hunting plots at maximum significance cut """
     best_loss = {'metric':wp_metric, 'eff':eff[np.argmax(sigma)], 'loss':thresholds[np.argmax(sigma)]}
@@ -103,9 +157,7 @@ def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=20
 
 def mass_distances(y_true, X_losses, X_mass, weights, metric, eff_type, truth, distance_dict, n_cuts=100):
     X_loss = X_losses[metric]
-    fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
-    fpr_0 = np.sum(fpr==0)
-    fpr, tpr, thresholds = 100*fpr[fpr_0:], 100*tpr[fpr_0:], thresholds[fpr_0:]
+    fpr, tpr, thresholds = get_rates(y_true, X_loss, weights)
     if eff_type == 'sig':
         eff = tpr
         x_min, x_max = 10*np.floor(tpr[0]/10), 100
@@ -192,7 +244,7 @@ def mass_correlation(y_true, X_losses, X_mass, weights, metrics_list, wp_metric,
     #plt.figure(figsize=(11,16));
     #plt.subplot(2, 1, 1); make_plot('KSD', wp_metric)
     #plt.subplot(2, 1, 2); make_plot('JSD', wp_metric)
-    file_name = output_dir + '/plots/' + 'mass_correlation.png'
+    file_name = output_dir + '/' + 'mass_correlation.png'
     print('Saving mass sculpting    to:', file_name); plt.savefig(file_name)
 
 
@@ -241,29 +293,10 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, best_loss=No
     plt.xlabel(label, fontsize=24)
     plt.ylabel('Distribution Density (%)', fontsize=24)
     plt.legend(loc='upper right', fontsize=18)
-    output_dir += '/plots/metrics_losses'
+    output_dir += '/metrics_losses'
     if not os.path.isdir(output_dir): os.mkdir(output_dir)
     file_name = output_dir+'/'+metric+'_loss.png'
     print('Saving metric loss       to:', file_name); plt.savefig(file_name)
-
-
-def plot_history(hist_file, output_dir, first_epoch=0, x_step=10):
-    losses = pickle.load(open(hist_file, 'rb'))
-    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
-    epochs = np.arange(1+first_epoch, len(list(losses.values())[0])+1)
-    if len(epochs) <= 1: return
-    for key, loss in losses.items():
-        plt.plot(epochs, loss[first_epoch:], label=key, lw=2)
-    pylab.xlim(1, epochs[-1])
-    plt.xticks(np.append(1, np.arange(x_step, epochs[-1]+x_step, x_step)))
-    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator())
-    pylab.ylim(0, min(50, np.max(losses['Train loss'][1:])))
-    plt.xlabel('Epoch', fontsize=25)
-    plt.ylabel('Loss', fontsize=25)
-    axes.tick_params(axis='both', which='major', labelsize=14)
-    plt.legend(loc='upper right', fontsize=18)
-    file_name = output_dir+'/plots/'+'train_history.png'
-    print('Saving training history  to:', file_name); plt.savefig(file_name)
 
 
 def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_name='', weight_type='None',
@@ -325,7 +358,7 @@ def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_
     plt.legend(loc='upper right', ncol=1 if len(samples)==1 else 2, fontsize=18)
     if file_name == '':
         file_name = (plot_var if plot_var=='pt' else 'mass')+'_dist.png'
-    file_name = output_dir+'/plots/'+file_name
+    file_name = output_dir+'/'+file_name
     print('Saving', format(plot_var, '2s'), 'distributions  to:', file_name); plt.savefig(file_name)
 
 
@@ -336,22 +369,23 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     metrics_dict = ROC_rates(y_true, X_losses, weights, metrics_list)
     """ Background rejection plot """
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
-    y_max = 0
+    bkg_rej_max = 0
     for metric in metrics_list:
-        fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
-        len_0 = np.sum(fpr==0)
-        y_max = max(y_max, np.max(1/fpr[len_0:]))
-        plt.text(0.98, 0.65-4*metrics_list.index(metric)/100, 'AUC: '+format(metrics.auc(fpr,tpr), '.3f'),
-                 {'color':color_dict[metric], 'fontsize':14}, va='center', ha='right', transform=axes.transAxes)
-        plt.plot(100*tpr[len_0:], 1/fpr[len_0:], label=metric, lw=2, color=color_dict[metric])
-        #plt.plot(100*(1-tpr[len_0:]), 100*(1-fpr[len_0:]), label=metric, lw=2, color=color_dict[metric])
-    metrics_scores = [[metrics_dict[metric][key] for key in ['fpr','tpr']] for metric in metrics_list]
-    y_max = 10**(1+np.ceil(np.log10(y_max)))
+        fpr, tpr, _ = metrics_dict[metric]
+        bkg_rej_max = max(bkg_rej_max, np.max(100/fpr))
+        #plt.text(0.98, 0.65-4*metrics_list.index(metric)/100, 'AUC: '+format(metrics.auc(fpr,tpr)/1e4, '.3f'),
+        #         {'color':color_dict[metric], 'fontsize':14}, va='center', ha='right', transform=axes.transAxes)
+        plt.plot(tpr, 100/fpr, label=metric, lw=2, color=color_dict[metric])
+    for metric in metrics_list:
+        fpr, tpr, _ = metrics_dict[metric]
+        plt.plot(np.nan, np.nan, '.', ms=0, label='(AUC: '+format(metrics.auc(fpr,tpr)/1e4, '.3f')+')')
+    metrics_scores = [metrics_dict[metric][:2] for metric in metrics_list]
+    y_max = 10**(1+np.ceil(np.log10(bkg_rej_max)))
     pylab.xlim(0,100); pylab.ylim(1,y_max)
     for wp in wps:
-        fpr_list = np.array([fpr[np.argwhere(100*tpr >= wp)[0]] for fpr,tpr in metrics_scores])
-        if np.all(fpr_list > 1e-4):
-            score = 1/np.min(fpr_list)
+        fpr_list = np.array([fpr[np.argwhere(tpr >= wp)[0]] for fpr,tpr in metrics_scores])
+        if np.all(100/fpr_list < bkg_rej_max):
+            score = 100/np.min(fpr_list)
             color = color_dict[metrics_list[np.argmin(fpr_list)]]
             axes.axhline(score, xmin=wp/100, xmax=1, ls='--', linewidth=1., color='dimgray')
             plt.text(100.4, score, str(int(score)), {'color':color, 'fontsize':14}, va="center", ha="left")
@@ -365,18 +399,18 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('$1/\epsilon_{\operatorname{bkg}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=14)
-    plt.legend(loc='upper right', fontsize=15, ncol=1 if len(metrics_list)<5 else 2 if len(metrics_list)<9 else 3)
-    file_name = output_dir + '/plots/' + 'bkg_rejection.png'
+    plt.legend(loc='best', fontsize=15, ncol=2, columnspacing=-2,
+               facecolor='ghostwhite', framealpha=1).set_zorder(10)
+    file_name = output_dir + '/' + 'bkg_rejection.png'
     print('Saving bkg rejection     to:', file_name); plt.savefig(file_name)
     """ Signal gain plot """
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     max_ROC_var = 0
     for metric in metrics_list:
-        fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
-        len_0    = np.sum(fpr==0)
-        ROC_var  = tpr[len_0:]/fpr[len_0:]
-        max_ROC_var = max(max_ROC_var, np.max(ROC_var[100*tpr[len_0:]>=1]))
-        plt.plot(100*tpr[len_0:], ROC_var, label=metric, lw=2, color=color_dict[metric])
+        fpr, tpr, _ = metrics_dict[metric]
+        ROC_var  = tpr/fpr
+        max_ROC_var = max(max_ROC_var, np.max(ROC_var[tpr>=1]))
+        plt.plot(tpr, ROC_var, label=metric, lw=2, color=color_dict[metric])
     pylab.xlim(1,100)
     pylab.ylim(0,np.ceil(max_ROC_var))
     plt.xscale('log')
@@ -387,19 +421,18 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     plt.ylabel('$G_{S/B}=\epsilon_{\operatorname{sig}}/\epsilon_{\operatorname{bkg}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=15)
     plt.legend(loc='upper left', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
-    file_name = output_dir + '/plots/' + 'signal_gain.png'
+    file_name = output_dir + '/' + 'signal_gain.png'
     print('Saving signal gain       to:', file_name); plt.savefig(file_name)
     """ Significance plot """
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     max_ROC_var = 0
     for metric in metrics_list:
-        fpr, tpr = [metrics_dict[metric][key] for key in ['fpr','tpr']]
-        len_0    = np.sum(fpr==0)
+        fpr, tpr, _ = metrics_dict[metric]
         n_sig = np.sum(weights[y_true==0])
         n_bkg = np.sum(weights[y_true==1])
-        ROC_var = n_sig*tpr[len_0:]/np.sqrt(n_bkg*fpr[len_0:])
-        max_ROC_var = max(max_ROC_var, np.max(ROC_var[100*tpr[len_0:]>=1]))
-        plt.plot(100*tpr[len_0:], ROC_var, label=metric, lw=2, color=color_dict[metric])
+        ROC_var = n_sig*tpr/np.sqrt(n_bkg*fpr)/10
+        max_ROC_var = max(max_ROC_var, np.max(ROC_var[tpr>=1]))
+        plt.plot(tpr, ROC_var, label=metric, lw=2, color=color_dict[metric])
     val = ROC_var[-1]
     #axes.axhline(val, xmin=0, xmax=1, ls='--', linewidth=1., color='dimgray')
     plt.text(100.4, val, format(val,'.1f'), {'color':'dimgray', 'fontsize':14}, va="center", ha="left")
@@ -414,8 +447,36 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
                +'$\sqrt{n_{\operatorname{bkg}}\epsilon_{\operatorname{bkg}}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=14)
     plt.legend(loc='upper left', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
-    file_name = output_dir + '/plots/' + 'significance.png'
+    file_name = output_dir + '/' + 'significance.png'
     print('Saving significance      to:', file_name); plt.savefig(file_name)
+
+
+def ROC_rates(y_true, X_losses, weights, metrics_list):
+    manager      = mp.Manager(); return_dict = manager.dict()
+    arguments    = [(y_true, X_losses[metric], weights, metric, return_dict) for metric in metrics_list]
+    processes    = [mp.Process(target=get_rates, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    return {metric:return_dict[metric] for metric in metrics_list}
+
+
+def plot_history(hist_file, output_dir, first_epoch=0, x_step=10):
+    losses = pickle.load(open(hist_file, 'rb'))
+    plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
+    epochs = np.arange(1+first_epoch, len(list(losses.values())[0])+1)
+    if len(epochs) <= 1: return
+    for key, loss in losses.items():
+        plt.plot(epochs, loss[first_epoch:], label=key, lw=2)
+    pylab.xlim(1, epochs[-1])
+    plt.xticks(np.append(1, np.arange(x_step, epochs[-1]+x_step, x_step)))
+    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator())
+    pylab.ylim(0, min(50, np.max(losses['Train loss'][1:])))
+    plt.xlabel('Epoch', fontsize=25)
+    plt.ylabel('Loss', fontsize=25)
+    axes.tick_params(axis='both', which='major', labelsize=14)
+    plt.legend(loc='upper right', fontsize=18)
+    file_name = output_dir+ '/'+ 'train_history.png'
+    print('Saving training history  to:', file_name); plt.savefig(file_name)
 
 
 def pt_reconstruction(X_true, X_pred, y_true, weights, output_dir, n_bins=200):
@@ -451,20 +512,6 @@ def quantile_reconstruction(y_true, X_true, X_pred, sample, scaler, output_dir):
     #pt_reconstruction(sample['clusters'], X_true, y_true, None, output_dir)
     #X_pred = inverse_scaler(X_pred, scaler)
     #pt_reconstruction(sample['clusters'], X_pred, y_true, None, output_dir)
-
-
-def get_rates(y_true, X_losses, weights, metric, return_dict):
-    fpr, tpr, _ = metrics.roc_curve(y_true, X_losses[metric], pos_label=0, sample_weight=weights)
-    return_dict[metric] = {'fpr':fpr, 'tpr':tpr}
-
-
-def ROC_rates(y_true, X_losses, weights, metrics_list):
-    manager      = mp.Manager(); return_dict = manager.dict()
-    arguments    = [(y_true, X_losses, weights, metric, return_dict) for metric in metrics_list]
-    processes    = [mp.Process(target=get_rates, args=arg) for arg in arguments]
-    for task in processes: task.start()
-    for task in processes: task.join()
-    return {metric:return_dict[metric] for metric in metrics_list}
 
 
 def KS_distance(dist_1, dist_2, weights_1=None, weights_2=None):

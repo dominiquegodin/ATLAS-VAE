@@ -13,7 +13,7 @@ parser.add_argument( '--n_constituents'                , default = 'unknown'   )
 parser.add_argument( '--merging'                       , default = 'OFF'       )
 parser.add_argument( '--library'                       , default = 'np'        ) #('np':fast, 'ak':slow)
 parser.add_argument( '--tag', '--names-list', nargs='+', default = [0]         )
-args = parser.parse_args(); print(args)
+args = parser.parse_args()
 
 
 # INPUT/OUTPUT PATHS

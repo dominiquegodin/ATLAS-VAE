@@ -83,7 +83,7 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
     if 'weights' not in sample:
         sample['weights'] = np.full(sample_size, 1                              , dtype=np.float32)
     """ Applying sample cuts"""
-    sample = apply_cuts(sample, cuts, DSIDs)
+    sample = sample_cuts(sample, cuts, DSIDs)
     """ Adjusting weights for cross-section """
     if adjust_weights:
         sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
@@ -141,7 +141,7 @@ def merge_losses(losses, history, model_in, output_dir):
     return losses
 
 
-def apply_cuts(sample, cuts, DSIDs=None):
+def sample_cuts(sample, cuts, DSIDs=None):
     sample_size = len(list(sample.values())[0])
     cut_list    = [np.full(sample_size, True)]
     for cut in cuts:
@@ -300,7 +300,7 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
     else: return loss
 
 
-def fit_scaler(sample, n_dims, scaler_out, reshape=False, scaler_type='RobustScaler'):
+def fit_scaler(sample, n_dims, scaler_out, scaler_type='RobustScaler', reshape=False):
     print('\nFitting', scaler_type, 'scaler', end=' ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     if scaler_type == 'QuantileTransformer':
@@ -348,32 +348,6 @@ def inverse_scaler(sample, n_dims, scaler, reshape=False):
     return sample
 
 
-def best_threshold(y_true, X_loss, X_mass, weights, cut_type):
-    fpr, tpr, thresholds = metrics.roc_curve(y_true, X_loss, pos_label=0, sample_weight=weights)
-    len_0      = np.sum(fpr==0)
-    thresholds = thresholds[len_0:][tpr[len_0:]>0.01]
-    if cut_type=='gain' :
-        cut_values = (tpr[len_0:]/fpr[len_0:])         [tpr[len_0:]>0.01]
-    if cut_type=='sigma':
-        cut_values = (tpr[len_0:]/np.sqrt(fpr[len_0:]))[tpr[len_0:]>0.01]
-    cut_index = np.argmax(cut_values)
-    if cut_type=='sigma':
-        n_sig = np.sum(weights[y_true==0])
-        n_bkg = np.sum(weights[y_true==1])
-        cut_values *= n_sig/np.sqrt(n_bkg)
-    return thresholds[cut_index], cut_values[cut_index]
-
-
-def apply_best_cut(y_true, X_true, X_pred, sample, n_dims, model, metric, cut_type='gain'):
-    if metric == 'Latent': X_loss = latent_loss(X_true, model)
-    else: X_loss = loss_function(X_true, X_pred, n_dims, metric, multiloss=False)
-    loss_cut, loss_val = best_threshold(y_true, X_loss, sample['m'], sample['weights'], cut_type)
-    print('Best', metric, 'cut on '+format(cut_type,'5s')+':', metric, '>=', end= ' ')
-    print(format(loss_cut, '.3f')+' / best '+format(cut_type,'5s'), '=', format(loss_val, '>5.2f'))
-    sample = {key:sample[key][X_loss>loss_cut] for key in sample}
-    return sample
-
-
 def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,300], bins=50,
                 make_histo=True, print_info=True, logspace=False):
     #import pyBumpHunter as BH; sys.path.append('../')
@@ -393,7 +367,7 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,300], bins=50
     hunter = BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
                           npe=1000, nworker=1, seed=0, bins=bin_edges)
     hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=make_histo and print_info)
-    filename = None if output_dir==None else output_dir+'/plots/'+'BH_'+cut_type+'.png'
+    filename = None if output_dir==None else output_dir+'/'+'BH_'+cut_type+'.png'
     if make_histo: print('Saving bump hunting plot to:', filename)
     max_sig = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
     if make_histo and print_info:

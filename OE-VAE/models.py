@@ -176,7 +176,7 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
         print('(', '\b' + format(time.time() - start_time, '.1f'), '\b' + 's)')
         for key in history: history[key] += [losses[key].numpy() if key in losses else 0]
         if epoch > 0: optimizer, count = model_checkpoint(vae, optimizer, history, model_out, count)
-        else        : vae.save_weights(model_out)
+        elif model_out is not None: vae.save_weights(model_out)
         if hist_file is not None: pickle.dump(history, open(hist_file,'wb'))
 
 

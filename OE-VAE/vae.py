@@ -10,8 +10,8 @@ from   sklearn   import utils
 from   copy      import deepcopy
 from   models    import VariationalAutoEncoder, train_model
 from   utils     import load_data, make_sample, Batch_Generator, fit_scaler, apply_scaler
-from   utils     import get_file, apply_best_cut, bump_hunter, filtering, grid_search
-from   plots     import sample_distributions, plot_distributions, plot_results, plot_history
+from   utils     import get_file, filtering, grid_search
+from   plots     import sample_distributions, apply_cuts, plot_results, plot_history
 
 
 # PROGRAM ARGUMENTS
@@ -33,17 +33,17 @@ parser.add_argument( '--OE_type'       , default = 'KLD'                        
 parser.add_argument( '--weight_type'   , default = 'X-S'                               )
 parser.add_argument( '--output_dir'    , default = 'outputs'                           )
 parser.add_argument( '--model_in'      , default = ''                                  )
-parser.add_argument( '--scaler_in'     , default = ''                                  )
 parser.add_argument( '--model_out'     , default = 'model.h5'                          )
+parser.add_argument( '--scaler_in'     , default = ''                                  )
 parser.add_argument( '--scaler_out'    , default = 'scaler.pkl'                        )
+parser.add_argument( '--scaler_type'   , default = 'RobustScaler'                      )
 parser.add_argument( '--hist_file'     , default = 'history.pkl'                       )
-parser.add_argument( '--scaling'       , default = 'ON'                                )
 parser.add_argument( '--plotting'      , default = 'OFF'                               )
 parser.add_argument( '--apply_cut'     , default = 'OFF'                               )
-parser.add_argument( '--bump_hunter'   , default = 'OFF'                               )
-parser.add_argument( '--array_id'      , default = 0            , type = int           )
+parser.add_argument( '--cut_types'     , default = ['bkg_eff','gain']       , nargs='+')
+parser.add_argument( '--slurm_id'      , default = 0            , type = int           )
 args = parser.parse_args()
-#args.n_const = grid_search(n_const=[20, 40, 60, 80, 100]             )[args.array_id]
+#args.n_const = grid_search(n_const=[20, 40, 60, 80, 100])[args.array_id]
 #args.output_dir += '/n_const'+str(int(args.n_const))
 #args.beta, args.lamb = grid_search(beta=[0, 0.1, 1, 10], lamb=[0, 1, 10, 100])[args.array_id]
 #args.output_dir += '/beta'+str(int(args.beta))+'_lamb'+str(int(args.lamb))
@@ -93,16 +93,17 @@ if os.path.isfile(args.scaler_in):
     scaler = pickle.load(open(args.scaler_in, 'rb'))
 else:
     scaler = None
-for path in list(accumulate([folder+'/' for folder in (args.output_dir+'/plots').split('/')])):
+args.output_dir += '/plots'
+for path in list(accumulate([folder+'/' for folder in args.output_dir.split('/')])):
     try: os.mkdir(path)
     except FileExistsError: pass
 
 
 # MODEL TRAINING
 if args.n_epochs > 0:
-    if args.scaling == 'ON' and scaler == None:
+    if args.scaler_type.lower() != 'none' and scaler == None:
         train_sample = load_data(bkg_data, args.n_train, bkg_cuts, args.n_const, args.n_dims)
-        scaler = fit_scaler(train_sample['constituents'], args.n_dims, args.scaler_out)
+        scaler = fit_scaler(train_sample['constituents'], args.n_dims, args.scaler_out, args.scaler_type)
     bin_sizes = {'m':10,'pt':20} if args.weight_type.split('_')[0] in ['flat','OoD'] else {'m':10,'pt':20}
     train_sample = Batch_Generator(bkg_data, OoD_data, args.n_train, args.n_OoD, bkg_cuts, OoD_cuts,
                                    args.n_const, args.n_dims, args.weight_type, bin_sizes, scaler)
@@ -139,20 +140,17 @@ y_true, X_true, X_pred, sample = filtering(y_true, X_true, X_pred, sample)
 
 
 # BKG SUPPRESION AND MASS SCULPTING METRIC
-wp_metric = 'Latent' if (args.OE_type=='KLD' and 'Latent' in metrics) else 'MSE'
+main_metric = 'Latent' if (args.OE_type=='KLD' and 'Latent' in metrics) else 'MSE'
 
 
-# CUT ON RECONSTRUCTION LOSS
-if args.apply_cut == 'ON' or args.bump_hunter == 'ON':
-    for cut_type in ['gain', 'sigma']:
-        cut_sample = apply_best_cut(y_true, X_true, X_pred, sample, args.n_dims, model, wp_metric, cut_type)
-        if args.bump_hunter == 'ON': bump_hunter(cut_sample, args.output_dir, cut_type)
-        plot_distributions([sample,cut_sample], sig_data, plot_var='m', bin_sizes={'m':2.5,'pt':10},
-                           output_dir=args.output_dir, file_name='bkg_supp-'+cut_type+'.png')
+# APPLYING CUTS ON SAMPLES
+if args.apply_cut == 'ON':
+    apply_cuts(y_true, X_true, X_pred, sample, args.n_dims, model, main_metric,
+               sig_data, args.cut_types, args.output_dir)
 
 
-# PLOTTING RESULTS
+# PLOTTING PERFORMANCE RESULTS
 if args.plotting == 'ON':
     plot_results(y_true, X_true, X_pred, sample, args.n_dims, model,
-                 metrics, wp_metric, sig_data, args.output_dir)
+                 metrics, main_metric, sig_data, args.output_dir)
     if os.path.isfile(args.hist_file): plot_history(args.hist_file, args.output_dir)
