@@ -58,7 +58,9 @@ class Sampling(layers.Layer):
         z_mean, z_log_var = inputs
         sigma = tf.exp(z_log_var/2)
         sigma = clip_values(sigma, max_val=1e6)
-        return tf.random.normal(tf.shape(z_mean), seed=seed)*sigma + z_mean
+        tf.random.set_seed(seed)
+        #return tf.random.normal(tf.shape(z_mean), seed=seed)*sigma + z_mean
+        return tf.random.normal(tf.shape(z_mean), mean=z_mean, stddev=sigma, seed=seed)
 
 
 def KLD_loss(z_mean, z_log_var):

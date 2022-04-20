@@ -21,7 +21,7 @@ parser.add_argument( '--n_valid'       , default = 1e6          , type = float  
 parser.add_argument( '--n_OoD'         , default = 2e6          , type = float         )
 parser.add_argument( '--n_sig'         , default = 1e6          , type = float         )
 parser.add_argument( '--n_const'       , default = 20           , type = int           )
-parser.add_argument( '--n_dims'        , default = 4            , type = int           )
+parser.add_argument( '--n_dims'        , default = 3            , type = int           )
 parser.add_argument( '--batch_size'    , default = 1e4          , type = float         )
 parser.add_argument( '--n_epochs'      , default = 50           , type = int           )
 parser.add_argument( '--FC_layers'     , default = [80,40,20,10], type = int, nargs='+')
@@ -73,7 +73,7 @@ metrics = ['MSE','Latent'] #+ ['MAE','X-S'] + ['JSD','EMD','KSD','KLD'] + ['Inpu
 
 # LOADIND PRE-TRAINED WEIGHTS AND/OR CONSTITUENTS SCALER
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR) #Suppressing Tensorflow warnings
-seed  = None if args.n_epochs > 0 else 0
+seed  = None if (args.n_epochs > 0 or args.n_iter > 1) else 0
 model = VariationalAutoEncoder(args.FC_layers, args.n_dims*args.n_const, seed=seed)
 args.model_in   = args.output_dir+'/'+args.model_in
 args.model_out  = args.output_dir+'/'+args.model_out
