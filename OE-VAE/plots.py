@@ -35,7 +35,7 @@ def apply_cuts(y_true, X_true, X_pred, sample, n_dims, model, metric, sig_data, 
     print('APPLYING CUTS ON SAMPLES:')
     def plot_suppression(sample, sig_data, X_loss, positive_rates, bkg_eff=None, file_name=None):
         cut_sample = make_cut(y_true, X_loss, sample, positive_rates, metric, cut_type, bkg_eff)
-        if file_name is None: file_name  = 'bkg_suppression/blg_eff_' + format(bkg_eff,'1.0e')
+        if file_name is None: file_name  = 'bkg_suppression/bkg_eff_' + format(bkg_eff,'1.0e')
         sample_distributions([sample,cut_sample], sig_data, output_dir, file_name)
     if not os.path.isdir(output_dir+'/bkg_suppression'): os.mkdir(output_dir+'/bkg_suppression')
     if metric == 'Latent': X_loss = latent_loss(X_true, model)
@@ -137,12 +137,13 @@ def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=20
         xmin = (max_eff-x_min)/(x_max-x_min)
         plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     elif eff_type == 'bkg':
-        xmin = (np.log10(max_eff)-np.log10(x_min))/(np.log10(x_max)-np.log10(x_min))
         plt.xlabel('$\epsilon_{\operatorname{bkg}}$ (%)', fontsize=25)
         plt.xscale('log')
         pos    = [10**int(n) for n in range(-4,3)]
         labels = [('$10^{'+str(n)+'}$' if n<=-1 else int(10**n))for n in range(-4,3)]
         plt.xticks(pos, labels)
+        x_min = axes.get_xlim()[0]
+        xmin = (np.log10(max_eff)-np.log10(x_min))/(np.log10(x_max)-np.log10(x_min))
     axes.axhline(max_val, xmin=xmin, xmax=1, ls='--', linewidth=1., color='dimgray')
     plt.ylabel('Significance', fontsize=25)
     file_name = output_dir+'/'+'BH_sigma.png'
@@ -304,6 +305,7 @@ def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_
     if   'top' in sig_data: tag = r'$t\bar{t}$'
     elif 'BSM' in sig_data: tag = 'BSM'
     elif 'OoD' in sig_data: tag = 'OoD'
+    elif '2HDM' in sig_data: tag = '2HDM'
     if 'OoD' in sig_data: labels = {0:[tag,'QCD'], 1:[tag+' (weighted)','QCD (weighted)']}
     else: labels = {0:[tag,'QCD'], 1:[tag+' (cut)','QCD (cut)']}
     colors = ['tab:orange', 'tab:blue', 'tab:brown']; alphas = [1, 0.5]
@@ -339,7 +341,7 @@ def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_
         if   plot_var == 'm' : pylab.xlim(0, 1200); pylab.ylim(1e0, 1e5)
         elif plot_var == 'pt': pylab.xlim(0, 3000); pylab.ylim(1e0, 1e5)
     elif 'Geneva' in sig_data:
-        if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e-2, 1e5)
+        if   plot_var == 'm' : pylab.xlim(0, 700) ; pylab.ylim(1e-2, 1e5)
         elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e-2, 1e5)
     else:
         if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e0, 1e6)

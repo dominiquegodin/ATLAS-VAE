@@ -52,6 +52,7 @@ for key in ['n_train', 'n_valid', 'n_OoD', 'n_sig', 'batch_size']: vars(args)[ke
 
 # SAMPLES DEFINITIONS
 bkg_data, OoD_data, sig_data = 'qcd-Geneva', 'H-OoD', 'top-Geneva'
+#bkg_data, OoD_data, sig_data = 'qcd-Geneva', 'H-OoD', '2HDM-Geneva'
 #bkg_data, OoD_data, sig_data = 'qcd-UFO'   , 'H-OoD', 'top-UFO'
 sample_size  = len(list(h5py.File(get_file(bkg_data),'r').values())[0])
 args.n_train = [0                         , min(args.n_train, sample_size - args.n_valid)]
@@ -104,7 +105,7 @@ if args.n_epochs > 0:
     if args.scaler_type.lower() != 'none' and scaler == None:
         train_sample = load_data(bkg_data, args.n_train, bkg_cuts, args.n_const, args.n_dims)
         scaler = fit_scaler(train_sample['constituents'], args.n_dims, args.scaler_out, args.scaler_type)
-    bin_sizes = {'m':10,'pt':20} if args.weight_type.split('_')[0] in ['flat','OoD'] else {'m':10,'pt':20}
+    bin_sizes = {'m':20,'pt':40} if args.weight_type.split('_')[0] in ['flat','OoD'] else {'m':10,'pt':20}
     train_sample = Batch_Generator(bkg_data, OoD_data, args.n_train, args.n_OoD, bkg_cuts, OoD_cuts,
                                    args.n_const, args.n_dims, args.weight_type, bin_sizes, scaler)
     plot_sample = train_sample[0]
@@ -127,7 +128,7 @@ sample = make_sample(bkg_data, sig_data, args.n_valid, args.n_sig, bkg_cuts, sig
 """ Defining labels """
 y_true = np.where(sample['JZW']==-1, 0, 1)
 """ Adjusting signal weights (Delphes samples)"""
-if sig_data == 'top-Geneva': sample['weights'][y_true==0] /= 1e3
+if 'Geneva' in sig_data: sample['weights'][y_true==0] /= 1e3
 #sample_distributions(sample,sig_data, args.output_dir, 'valid')
 if scaler is not None: X_true = apply_scaler(sample['constituents'], args.n_dims, scaler)
 else                 : X_true =              sample['constituents']

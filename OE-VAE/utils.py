@@ -21,6 +21,7 @@ def get_file(data_type, host_name='atlas'):
                   'top-Geneva' :'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5',
                   'qcd-Delphes':'Delphes_dijet.h5'   ,
                   'top-Delphes':'Delphes_ttbar.h5'   ,
+                  '2HDM-Geneva':'formatted_delphes_H_HpHm_generation_mh2_5000_mhc_500_0.h5',
                   'qcd-topo'   :'Atlas_topo-dijet.h5',
                   'top-topo'   :'Atlas_topo-ttbar.h5',
                   'qcd-UFO'    :'Atlas_UFO-dijet.h5' ,
@@ -348,7 +349,8 @@ def inverse_scaler(sample, n_dims, scaler, reshape=False):
     return sample
 
 
-def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,300], bins=50,
+def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,700], bins=100,
+#def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,300], bins=50,
                 make_histo=True, print_info=True, logspace=False):
     #import pyBumpHunter as BH; sys.path.append('../')
     #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
