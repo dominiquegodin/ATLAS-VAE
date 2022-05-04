@@ -18,12 +18,12 @@ from   plots     import sample_distributions, apply_cuts, plot_results, plot_his
 parser = ArgumentParser()
 parser.add_argument( '--n_train'       , default = 1e6          , type = float         )
 parser.add_argument( '--n_valid'       , default = 1e6          , type = float         )
-parser.add_argument( '--n_OoD'         , default = 2e6          , type = float         )
+parser.add_argument( '--n_OoD'         , default = 5e6          , type = float         )
 parser.add_argument( '--n_sig'         , default = 1e6          , type = float         )
 parser.add_argument( '--n_const'       , default = 20           , type = int           )
 parser.add_argument( '--n_dims'        , default = 3            , type = int           )
 parser.add_argument( '--batch_size'    , default = 1e4          , type = float         )
-parser.add_argument( '--n_epochs'      , default = 50           , type = int           )
+parser.add_argument( '--n_epochs'      , default = 100          , type = int           )
 parser.add_argument( '--FC_layers'     , default = [80,40,20,10], type = int, nargs='+')
 parser.add_argument( '--lr'            , default = 1e-3         , type = float         )
 parser.add_argument( '--beta'          , default = 0            , type = float         )
@@ -69,7 +69,7 @@ sig_cuts = ['(sample["pt"] <= 3000)'] + gen_cuts
 
 
 # METRICS LIST
-metrics = ['MSE','Latent'] #+ ['MAE','X-S'] + ['JSD','EMD','KSD','KLD'] + ['Inputs']
+metrics = ['Latent', 'MSE'] #+ ['MAE','X-S'] + ['JSD','EMD','KSD','KLD'] + ['Inputs']
 
 
 # LOADIND PRE-TRAINED WEIGHTS AND/OR CONSTITUENTS SCALER
@@ -128,7 +128,8 @@ sample = make_sample(bkg_data, sig_data, args.n_valid, args.n_sig, bkg_cuts, sig
 """ Defining labels """
 y_true = np.where(sample['JZW']==-1, 0, 1)
 """ Adjusting signal weights (Delphes samples)"""
-if 'Geneva' in sig_data: sample['weights'][y_true==0] /= 1e3
+if sig_data ==  'top-Geneva': sample['weights'][y_true==0] /= 1e3
+if sig_data == '2HDM-Geneva': sample['weights'][y_true==0] /= 1e3
 #sample_distributions(sample,sig_data, args.output_dir, 'valid')
 if scaler is not None: X_true = apply_scaler(sample['constituents'], args.n_dims, scaler)
 else                 : X_true =              sample['constituents']

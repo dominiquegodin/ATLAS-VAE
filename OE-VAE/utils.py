@@ -21,7 +21,7 @@ def get_file(data_type, host_name='atlas'):
                   'top-Geneva' :'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5',
                   'qcd-Delphes':'Delphes_dijet.h5'   ,
                   'top-Delphes':'Delphes_ttbar.h5'   ,
-                  '2HDM-Geneva':'formatted_delphes_H_HpHm_generation_mh2_5000_mhc_500_0.h5',
+                  '2HDM-Geneva':'formatted_delphes_H_HpHm_generation_mh2_5000_mhc_500_nevents_1M.h5',
                   'qcd-topo'   :'Atlas_topo-dijet.h5',
                   'top-topo'   :'Atlas_topo-ttbar.h5',
                   'qcd-UFO'    :'Atlas_UFO-dijet.h5' ,
@@ -176,20 +176,17 @@ def reweight_sample(bkg_sample, sig_sample, bin_sizes, weight_type='X-S'):
         sig_sample['weights'] = get_weights(bkg_sample, sig_sample, bin_sizes, weight_type='2d')
     if 'OoD' in weight_type:
         sig_sample['weights'] = get_weights(bkg_sample, sig_sample, bin_sizes, weight_type)
+    if weight_type == 'X-S':
+        sig_sample['weights'] *= np.sum(bkg_sample['weights'])/np.sum(sig_sample['weights'])
     return bkg_sample, sig_sample
 
 
-def get_weights(bkg_sample, sig_sample, bin_sizes, weight_type, max_val=1e3, density=True):
+def get_weights(bkg_sample, sig_sample, bin_sizes, weight_type, max_val=1e4, density=True):
     m_size, pt_size = bin_sizes['m'], bin_sizes['pt']
     m_bkg, pt_bkg, weights_bkg = [bkg_sample[key] for key in ['m','pt','weights']]
     m_sig, pt_sig, weights_sig = [sig_sample[key] for key in ['m','pt','weights']]
     m_min, pt_min = np.min(m_sig), np.min(pt_sig)
     m_max, pt_max = np.max(m_sig), np.max(pt_sig)
-    #if   'm'  in weight_type: cut_list = [ m_bkg>= m_min,  m_bkg<= m_max]
-    #elif 'pt' in weight_type: cut_list = [pt_bkg>=pt_min, pt_bkg<=pt_max]
-    #else                    : cut_list = [ m_bkg>= m_min,  m_bkg<= m_max] + [pt_bkg>=pt_min, pt_bkg<=pt_max]
-    #m_min, pt_min = min(m_min, np.min(m_bkg)), min(pt_min, np.min(pt_bkg))
-    #m_max, pt_max = max(m_max, np.max(m_bkg)), max(pt_max, np.max(pt_bkg))
     if 'm'  in weight_type: pt_size = pt_max+1
     if 'pt' in weight_type:  m_size =  m_max+1
     m_bins  = get_idx( m_max, bin_size= m_size, min_val= m_min, integer=False, tuples=False)
@@ -206,8 +203,6 @@ def get_weights(bkg_sample, sig_sample, bin_sizes, weight_type, max_val=1e3, den
     if density: hist_bkg *= len(m_bkg)
     weights = (hist_bkg/hist_sig)[m_idx, pt_idx]
     return np.minimum( max_val, weights*np.sum(weights_bkg)/np.sum(weights) )
-    #cuts = np.logical_and.reduce(cut_list)
-    #return np.minimum( max_val, weights*np.sum(weights_bkg[cuts])/np.sum(weights) )
 
 
 def weights_factors(JZW, data_file):
