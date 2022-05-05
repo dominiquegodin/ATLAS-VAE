@@ -633,7 +633,7 @@ def valid_results(sample, labels, probs, train_labels, training, output_dir, plo
     manager = mp.Manager(); return_dict = manager.dict()
     arguments = [(sample, labels, probs, plotting, output_dir, sig_list, bkg, return_dict) for bkg in bkg_list]
     processes = [mp.Process(target=print_results, args=arg) for arg in arguments]
-    if training != None: processes += [mp.Process(target=plot_history, args=(training, output_dir,))]
+    #if training != None: processes += [mp.Process(target=plot_history, args=(training, output_dir,))]
     for job in processes: job.start()
     for job in processes: job.join()
     if plotting=='OFF': # bkg_rej extraction

@@ -280,7 +280,7 @@ def plot_ROC_curves(sample, y_true, y_prob, output_dir, ROC_type, ECIDS, ROC_val
         plt.ylabel('1/'+bkg_eff, fontsize=25)
 
         fpr, tpr, _ = metrics.roc_curve(y_true, y_prob, pos_label=0, sample_weight=sample['weights'])
-        pickle.dump({'fpr':fpr, 'tpr':tpr}, open(output_dir+'/'+'pos_rates.pkl','wb'), protocol=4)
+        #pickle.dump({'fpr':fpr, 'tpr':tpr}, open(output_dir+'/'+'pos_rates.pkl','wb'), protocol=4)
         len_0 = np.sum(fpr==0)
         #plt.text(0.5, 0.19, 'AUC: '+format(metrics.auc(fpr,tpr),'.4f'), color='tab:blue', fontsize=19,
         plt.text(0.5, 0.09, 'AUC: '+format(metrics.auc(fpr,tpr),'.4f'), color='tab:blue', fontsize=19,
