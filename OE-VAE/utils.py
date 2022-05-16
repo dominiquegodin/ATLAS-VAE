@@ -8,6 +8,52 @@ from   scipy         import stats
 from   energyflow    import emd
 
 
+def jets_pt(jets):
+    def get_mean(jets, idx, return_dict):
+        jets = np.cumsum(np.reshape(np.float32(jets), (-1,int(jets.shape[1]/4),4)), axis=1)
+        return_dict[idx] = np.sqrt(jets[:,:,1]**2 + jets[:,:,2]**2)
+    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
+    processes = [mp.Process(target=get_mean, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    return np.concatenate([return_dict[key] for key in idx_tuples], axis=0)
+
+
+def jets_sorting(jets, idx=(0,None), return_dict=None):
+    jets   = np.reshape(np.float32(jets), (-1,int(jets.shape[1]/4),4))
+    pt     = np.sqrt(jets[:,:,1]**2 + jets[:,:,2]**2)
+    pt_idx = np.argsort(pt, axis=-1)[:,::-1,np.newaxis]
+    pt_idx = np.concatenate(4*[pt_idx], axis=2)
+    jets   = np.take_along_axis(jets, pt_idx, axis=1)
+    if idx == (0,None): return np.reshape(jets, (-1,np.prod(jets.shape[1:])))
+    else: return_dict[idx]  =  np.reshape(jets, (-1,np.prod(jets.shape[1:])))
+def jets_sorting_mp(jets):
+    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
+    processes = [mp.Process(target=jets_sorting, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    return np.concatenate([return_dict[key] for key in idx_tuples], axis=0)
+
+
+def n_constituents(jets):
+    def get_number(jets, idx, return_dict):
+        jets = np.sum(np.reshape(np.abs(np.float32(jets)), (-1,int(jets.shape[1]/4),4)), axis=2)
+        jets = np.hstack([jets, np.zeros((jets.shape[0],1))])
+        jets = np.sort(jets, axis=-1)[:,::-1]
+        return_dict[idx] = np.argmin(jets, axis=1)
+    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
+    processes = [mp.Process(target=get_number, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    return np.concatenate([return_dict[key] for key in idx_tuples])
+
+
 def grid_search(**kwargs):
     if len(kwargs.items()) <= 1: array_tuple = list(kwargs.values())[0]
     else                       : array_tuple = list(itertools.product(*kwargs.values()))
@@ -19,6 +65,7 @@ def get_file(data_type, host_name='atlas'):
     if 'beluga' in host_name: data_path = '/project/def-arguinj/shared/AD_data'
     data_files = {'qcd-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M.h5'      ,
                   'top-Geneva' :'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5',
+                  #'top-Geneva' :'formatted_converted_20211213_ttbar_allhad_pT_450_1200_nevents_10M.h5',
                   'qcd-Delphes':'Delphes_dijet.h5'   ,
                   'top-Delphes':'Delphes_ttbar.h5'   ,
                   '2HDM-Geneva':'formatted_delphes_H_HpHm_generation_mh2_5000_mhc_500_nevents_1M.h5',
@@ -65,11 +112,14 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
     data      = h5py.File(data_file,"r")
     if var_list == None:
         var_list = ['m_calo','pt_calo','rljet_m_comb','rljet_pt_comb','weights','constituents','JZW','DSID']
+        #var_list = ['weights','constituents','JZW','DSID']
     sample = {key:data[key][idx[0]:idx[1]] for key in set(data) & set(var_list) if key!='constituents'}
     if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0:
         var_list += ['constituents']
     if 'constituents' in var_list:
-        sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_const])
+        sample['constituents'] = data['constituents'][idx[0]:idx[1],:data['constituents'].shape[1]]
+        sample['constituents'] = jets_sorting(sample['constituents'])[:,:4*n_const]
+        #sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_const])
         if 4*n_const > data['constituents'].shape[1]:
             shape = sample['constituents'].shape
             zeros_array = np.zeros((shape[0], 4*n_const-shape[1]), dtype=np.float32)
@@ -296,6 +346,17 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
     else: return loss
 
 
+def latent_loss(X_true, model):
+    idx_tuples = get_idx(len(X_true), bin_size=1e5)
+    X_latent = []
+    for idx in idx_tuples:
+        model(X_true[idx[0]:idx[1]])
+        X_latent += [model.losses[0].numpy()]
+    X_latent = np.concatenate(X_latent)
+    X_latent = np.where(np.isfinite(X_latent), X_latent, 0)
+    return X_latent
+
+
 def fit_scaler(sample, n_dims, scaler_out, scaler_type='RobustScaler', reshape=False):
     print('\nFitting', scaler_type, 'scaler', end=' ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
@@ -373,17 +434,6 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,700], bins=10
         print(format(time.time() - start_time, '2.1f'), '\b'+' s')
     else:
         return max_sig
-
-
-def latent_loss(X_true, model):
-    idx_tuples = get_idx(len(X_true), bin_size=1e5)
-    X_latent = []
-    for idx in idx_tuples:
-        model(X_true[idx[0]:idx[1]])
-        X_latent += [model.losses[0].numpy()]
-    X_latent = np.concatenate(X_latent)
-    X_latent = np.where(np.isfinite(X_latent), X_latent, 0)
-    return X_latent
 
 
 def filtering(y_true, X_true, X_pred, sample):
