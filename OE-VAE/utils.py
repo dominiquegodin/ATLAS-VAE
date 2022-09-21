@@ -8,105 +8,105 @@ from   scipy         import stats
 from   energyflow    import emd
 
 
-def jets_pt(jets):
-    def get_mean(jets, idx, return_dict):
-        jets = np.cumsum(np.reshape(np.float32(jets), (-1,int(jets.shape[1]/4),4)), axis=1)
-        return_dict[idx] = np.sqrt(jets[:,:,1]**2 + jets[:,:,2]**2)
-    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
-    manager = mp.Manager(); return_dict = manager.dict()
-    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
-    processes = [mp.Process(target=get_mean, args=arg) for arg in arguments]
-    for task in processes: task.start()
-    for task in processes: task.join()
-    return np.concatenate([return_dict[key] for key in idx_tuples], axis=0)
-
-
-def jets_sorting(jets, idx=(0,None), return_dict=None):
-    jets   = np.reshape(np.float32(jets), (-1,int(jets.shape[1]/4),4))
-    pt     = np.sqrt(jets[:,:,1]**2 + jets[:,:,2]**2)
-    pt_idx = np.argsort(pt, axis=-1)[:,::-1,np.newaxis]
-    pt_idx = np.concatenate(4*[pt_idx], axis=2)
-    jets   = np.take_along_axis(jets, pt_idx, axis=1)
-    if idx == (0,None): return np.reshape(jets, (-1,np.prod(jets.shape[1:])))
-    else: return_dict[idx]  =  np.reshape(jets, (-1,np.prod(jets.shape[1:])))
-def jets_sorting_mp(jets):
-    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
-    manager = mp.Manager(); return_dict = manager.dict()
-    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
-    processes = [mp.Process(target=jets_sorting, args=arg) for arg in arguments]
-    for task in processes: task.start()
-    for task in processes: task.join()
-    return np.concatenate([return_dict[key] for key in idx_tuples], axis=0)
-
-
-def n_constituents(jets):
-    def get_number(jets, idx, return_dict):
-        jets = np.sum(np.reshape(np.abs(np.float32(jets)), (-1,int(jets.shape[1]/4),4)), axis=2)
-        jets = np.hstack([jets, np.zeros((jets.shape[0],1))])
-        jets = np.sort(jets, axis=-1)[:,::-1]
-        return_dict[idx] = np.argmin(jets, axis=1)
-    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
-    manager = mp.Manager(); return_dict = manager.dict()
-    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
-    processes = [mp.Process(target=get_number, args=arg) for arg in arguments]
-    for task in processes: task.start()
-    for task in processes: task.join()
-    return np.concatenate([return_dict[key] for key in idx_tuples])
-
-
-def grid_search(**kwargs):
-    if len(kwargs.items()) <= 1: array_tuple = list(kwargs.values())[0]
-    else                       : array_tuple = list(itertools.product(*kwargs.values()))
-    return dict( zip(np.arange(len(array_tuple)), array_tuple) )
-
-
 def get_file(data_type, host_name='atlas'):
     if 'atlas'  in host_name: data_path = '/opt/tmp/godin/AD_data'
     if 'beluga' in host_name: data_path = '/project/def-arguinj/shared/AD_data'
-    data_files = {'qcd-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M.h5'      ,
-                  'top-Geneva' :'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5',
-                  #'top-Geneva' :'formatted_converted_20211213_ttbar_allhad_pT_450_1200_nevents_10M.h5',
+    data_files = {
+                  'qcd-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M_dPhifixed_float32.h5'       ,
+                  'top-Geneva' :'formatted_converted_20211213_ttbar_allhad_pT_450_1200_nevents_10M_dPhifixed_float32.h5',
+                  '2HDM-Geneva':'formatted_converted_delphes_H_HpHm_generation_mh2_2000_mhc_200_nevents_1M_float32.h5'  ,
+                  'H-OoD'      :'formatted_converted_Outliers_delphes_H_HpHm_generationredo_float32.h5'                 ,
                   'qcd-Delphes':'Delphes_dijet.h5'   ,
                   'top-Delphes':'Delphes_ttbar.h5'   ,
-                  '2HDM-Geneva':'formatted_delphes_H_HpHm_generation_mh2_5000_mhc_500_nevents_1M.h5',
                   'qcd-topo'   :'Atlas_topo-dijet.h5',
                   'top-topo'   :'Atlas_topo-ttbar.h5',
                   'qcd-UFO'    :'Atlas_UFO-dijet.h5' ,
                   'top-UFO'    :'Atlas_UFO-ttbar.h5' ,
                   'BSM'        :'Atlas_BSM.h5'       ,
                   'W-OoD'      :'resamples_oe_w.h5'  ,
-                  'H-OoD'      :'H_HpHm_generation_merged_with_masses_20_40_60_80_reformatted_nghia.h5'}
+                  }
     return data_path + '/' + data_files[data_type]
 
 
 class Batch_Generator(tf.keras.utils.Sequence):
-    def __init__(self, bkg_data, OoD_data, n_bkg=[0,1], n_OoD=[0,1], bkg_cuts='', OoD_cuts='',
-                 n_const=20, n_dims=4, weight_type='X-S', bin_sizes=None , scaler=None, memGB=30):
-        self.bkg_data  = bkg_data ; self.n_bkg  = n_bkg  ; self.bkg_cuts    = bkg_cuts
-        self.n_const   = n_const  ; self.n_dims = n_dims ; self.weight_type = weight_type
-        self.bin_sizes = bin_sizes; self.scaler = scaler
+    def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg=[0,1], n_OoD=[0,1], bkg_cuts='', OoD_cuts='',
+                 weight_type='X-S', bin_sizes=None , scaler=None, output_dir=None, memGB=30):
+        self.bkg_data    = bkg_data    ; self.OoD_data   = OoD_data
+        self.n_const     = n_const     ; self.n_dims     = n_dims
+        self.n_bkg       = n_bkg       ; self.bkg_cuts   = bkg_cuts
+        self.weight_type = weight_type ; self.bin_sizes  = bin_sizes
+        self.scaler      = scaler      ; self.output_dir = output_dir
         self.load_size  = min( np.diff(self.n_bkg)[0], int(1e9*memGB/self.n_const/self.n_dims/4) )
         self.OoD_sample = load_data(OoD_data, n_OoD, OoD_cuts, n_const, n_dims)
     def __len__(self):
         """ Number of batches per epoch """
         return int(np.ceil(np.diff(self.n_bkg)[0]/self.load_size))
     def __getitem__(self, gen_idx):
-        bkg_idx    = gen_idx*self.load_size   , (gen_idx+1)*self.load_size
-        bkg_idx    = bkg_idx[0]+self.n_bkg[0], min( bkg_idx[1]+self.n_bkg[0], self.n_bkg[1] )
+        if self.output_dir is not None: print('\nLoading training sample'.upper())
+        else                          : print('\nLoading validation sample'.upper())
+        bkg_idx = gen_idx*self.load_size  , (gen_idx+1)*self.load_size
+        bkg_idx = bkg_idx[0]+self.n_bkg[0], min( bkg_idx[1]+self.n_bkg[0], self.n_bkg[1] )
         bkg_sample = load_data(self.bkg_data, bkg_idx, self.bkg_cuts, self.n_const, self.n_dims)
-        OoD_sample = upsampling(self.OoD_sample, len(list(bkg_sample.values())[0]))
+        #OoD_sample = OoD_sampling(self.OoD_sample, len(list(bkg_sample.values())[0]))
+        OoD_sample = self.OoD_sample if self.n_bkg==[0,1] else OoD_pairing(bkg_sample, self.OoD_sample)
         if self.scaler is not None:
-            bkg_sample['constituents'] = apply_scaling(bkg_sample['constituents'], self.n_dims, self.scaler)
-            OoD_sample['constituents'] = apply_scaling(OoD_sample['constituents'], self.n_dims, self.scaler)
+            scale_sample = apply_scaling #apply_scaler (multiprocess)
+            bkg_sample['constituents'] = scale_sample(bkg_sample['constituents'], self.n_dims, self.scaler, 'QCD')
+            OoD_sample['constituents'] = scale_sample(OoD_sample['constituents'], self.n_dims, self.scaler, 'OoD')
+            print()
         if self.bin_sizes is not None:
             bkg_sample, OoD_sample = reweight_sample(bkg_sample, OoD_sample, self.bin_sizes, self.weight_type)
+        if self.output_dir is not None and gen_idx == 0:
+            from plots import sample_distributions
+            sample = {key:np.concatenate([bkg_sample[key], OoD_sample[key]]) for key in ['m','pt','weights','JZW']}
+            sample_distributions(sample, self.OoD_data, self.output_dir, 'train', self.weight_type, self.bin_sizes)
         return bkg_sample, OoD_sample
+
+
+def OoD_coupling(sample, target_size, adjust_weights=False, seed=None):
+    np.random.seed(seed)
+    source_size = len(list(sample.values())[0])
+    indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
+    if adjust_weights: sample['weights'] = sample['weights']*np.float32(source_size/target_size)
+    return {key:np.take(sample[key], indices, axis=0) for key in sample}
+
+
+def OoD_pairing(bkg_sample, OoD_sample, seed=0, verbose=True):
+    np.random.seed(seed)
+    m_idx = np.argsort(OoD_sample['m'])
+    OoD_sample = {key:np.take(OoD_sample[key], m_idx, axis=0) for key in OoD_sample}
+    m_OoD, pt_OoD = OoD_sample['m'], OoD_sample['pt']
+    m_bkg, pt_bkg = bkg_sample['m'], bkg_sample['pt']
+    def get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width, pairing='2d'):
+        idx  = np.searchsorted(m_OoD, m_val-m_width/2), np.searchsorted(m_OoD, m_val+m_width/2)
+        cuts = [pt_OoD[idx[0]:idx[1]] >= pt_val-pt_width/2, pt_OoD[idx[0]:idx[1]] <= pt_val+pt_width/2]
+        return idx[0], np.full(np.diff(idx),True) if pairing=='m' else np.logical_and.reduce(cuts)
+    def get_indice(m_OoD, pt_OoD, m_val, pt_val, m_width=10, pt_width=10, factor=2):
+        while True:
+            idx, cuts = get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width)
+            if np.sum(cuts) == 0: pt_width *= factor
+            else                : return np.random.choice(np.where(cuts)[0]) + idx
+            idx, cuts = get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width)
+            if np.sum(cuts) == 0:  m_width *= factor
+            else                : return np.random.choice(np.where(cuts)[0]) + idx
+    def get_indices(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict=None):
+        return_dict[idx] = [get_indice(m_OoD, pt_OoD, m_bkg[n], pt_bkg[n]) for n in range(idx[0], idx[1])]
+    if verbose: print('Coupling    OoD to QCD', end=' ', flush=True); start_time = time.time()
+    idx_tuples = get_idx(len(m_bkg), min(mp.cpu_count(),16))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict) for idx in idx_tuples]
+    processes = [mp.Process(target=get_indices, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    indices = np.concatenate([return_dict[key] for key in idx_tuples])
+    if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+    return {key:np.take(OoD_sample[key], indices, axis=0) for key in OoD_sample}
 
 
 def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
               adjust_weights=False, verbose=False):
     start_time = time.time()
-    if verbose: print('Loading', format(data_type,'^11s'), 'sample', end=' ', flush=True)
+    if verbose: print('Loading', format(data_type,'<10s'), 'sample', end=' ', flush=True)
     if np.isscalar(idx): idx = (0, idx)
     data_file = get_file(data_type)
     data      = h5py.File(data_file,"r")
@@ -117,8 +117,10 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
     if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0:
         var_list += ['constituents']
     if 'constituents' in var_list:
+        # Enforcing jets pt sorting
         sample['constituents'] = data['constituents'][idx[0]:idx[1],:data['constituents'].shape[1]]
         sample['constituents'] = jets_sorting(sample['constituents'])[:,:4*n_const]
+        # Assuming jets pt sorting
         #sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_const])
         if 4*n_const > data['constituents'].shape[1]:
             shape = sample['constituents'].shape
@@ -149,10 +151,10 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
     return sample
 
 
-def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, bkg_cuts='', sig_cuts='', n_const=20, n_dims=4,
+def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, cuts='', n_const=20, n_dims=4,
                 var_list=None, DSIDs=None, adjust_weights=False, verbose=True, shuffling=False):
-    sig_sample = load_data(sig_data, sig_idx, sig_cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
-    bkg_sample = load_data(bkg_data, bkg_idx, bkg_cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
+    sig_sample = load_data(sig_data, sig_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
+    bkg_sample = load_data(bkg_data, bkg_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
     if 'OoD' in sig_data: sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
     sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]])
               for key in set(bkg_sample)&set(sig_sample)}
@@ -165,15 +167,6 @@ def split_sample(sample):
     bkg_sample = {key:val[JZW!=-1] for key,val in sample.items()}
     sig_sample = {key:val[JZW==-1] for key,val in sample.items()}
     return bkg_sample, sig_sample
-
-
-def upsampling(sample, target_size, adjust_weights=False, seed=None):
-    source_size = len(list(sample.values())[0])
-    np.random.seed(seed)
-    indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
-    if adjust_weights:
-        sample['weights'] = sample['weights']*np.float32(source_size/target_size)
-    return {key:np.take(sample[key], indices, axis=0) for key in sample}
 
 
 def make_datasets(sample, sample_OE, batch_size=1):
@@ -197,7 +190,7 @@ def sample_cuts(sample, cuts, DSIDs=None):
     cut_list    = [np.full(sample_size, True)]
     for cut in cuts:
         try   : cut_list.append(eval(cut))
-        except: pass
+        except: print('WARNING: invalid cut:' , cut)
     cuts = np.logical_and.reduce(cut_list)
     if DSIDs != None:
         if np.isscalar(DSIDs): DSIDs = [DSIDs]
@@ -360,40 +353,38 @@ def latent_loss(X_true, model):
 def fit_scaler(sample, n_dims, scaler_out, scaler_type='RobustScaler', reshape=False):
     print('\nFitting', scaler_type, 'scaler', end=' ', flush=True); start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
-    if scaler_type == 'QuantileTransformer':
-        scaler = preprocessing.QuantileTransformer(output_distribution='uniform', n_quantiles=10000, random_state=0)
-    if scaler_type == 'MaxAbsScaler':
-        scaler = preprocessing.MaxAbsScaler()
+    if scaler_type == 'QuantileScaler':
+        scaler = preprocessing.QuantileTransformer(output_distribution='normal', n_quantiles=10000, random_state=0)
     if scaler_type == 'RobustScaler':
         scaler = preprocessing.RobustScaler()
+    if scaler_type == 'MaxAbsScaler':
+        scaler = preprocessing.MaxAbsScaler()
     scaler.fit(sample)
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    print('Saving scaler to', scaler_out, '\n')
+    print('Saving scaler to', scaler_out)
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
-def apply_scaling(sample, n_dims, scaler, reshape=False, verbose=False, idx=(0,None), return_dict=None):
-    if idx == (0,None) and verbose:
-        print('Applying scaler', end=' ', flush=True); start_time = time.time()
+def apply_scaling(sample, n_dims, scaler, tag, reshape=False, verbose=True, idx=(0,None), return_dict=None):
+    if idx == (0,None) and verbose: print('Applying scaler to '+tag, end=' ', flush=True); start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     sample = scaler.transform(sample)
     sample = np.reshape(sample, shape)
     if idx == (0,None):
-        if verbose:
-            print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+        if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
         return sample
     else: return_dict[idx] = sample
-def apply_scaler(sample, n_dims, scaler, reshape=False):
-    print('Applying scaler', end=' ', flush=True); start_time = time.time()
-    idx_tuples = get_idx(len(sample), mp.cpu_count())
-    manager    = mp.Manager(); return_dict = manager.dict()
-    arguments  = [(sample[idx[0]:idx[1]], n_dims, scaler, reshape, False, idx, return_dict)
-                  for idx in idx_tuples]
-    processes  = [mp.Process(target=apply_scaling, args=arg) for arg in arguments]
+def apply_scaler(sample, n_dims, scaler, tag='sample', reshape=False, verbose=True):
+    if verbose: print('Applying scaler to '+tag, end=' ', flush=True); start_time = time.time()
+    idx_tuples = get_idx(len(sample), int(mp.cpu_count()/2))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(sample[idx[0]:idx[1]], n_dims, scaler, tag, reshape, False, idx, return_dict)
+                 for idx in idx_tuples]
+    processes = [mp.Process(target=apply_scaling, args=arg) for arg in arguments]
     for task in processes: task.start()
     for task in processes: task.join()
     sample = np.concatenate([return_dict[idx] for idx in idx_tuples])
-    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)\n')
+    if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
 def inverse_scaler(sample, n_dims, scaler, reshape=False):
     print('Applying inverse scaler', end=' ', flush=True); start_time = time.time()
@@ -437,7 +428,6 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,700], bins=10
 
 
 def filtering(y_true, X_true, X_pred, sample):
-    #X_pred = tf.where(tf.math.is_finite(X_pred), X_pred, 0)
     bad_idx = list(set(np.where(~np.isfinite(X_pred))[0]))
     y_true  = np.delete(y_true, bad_idx, axis=0)
     X_true  = np.delete(X_true, bad_idx, axis=0)
@@ -454,3 +444,77 @@ def get_idx(max_val, n_bins=10, bin_size=None, min_val=0, integer=True, tuples=T
     if integer: idx_list = np.int_(idx_list)
     if tuples: return list(zip(idx_list[:-1], idx_list[1:]))
     else     : return idx_list
+
+
+def jets_pt(jets):
+    def get_mean(jets, idx, return_dict):
+        jets = np.cumsum(np.reshape(np.float32(jets), (-1,int(jets.shape[1]/4),4)), axis=1)
+        return_dict[idx] = np.sqrt(jets[:,:,1]**2 + jets[:,:,2]**2)
+    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
+    processes = [mp.Process(target=get_mean, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    return np.concatenate([return_dict[key] for key in idx_tuples], axis=0)
+
+
+def jets_sorting(jets, idx=(0,None), return_dict=None):
+    jets   = np.reshape(np.float32(jets), (-1,int(jets.shape[1]/4),4))
+    pt     = np.sqrt(jets[:,:,1]**2 + jets[:,:,2]**2)
+    pt_idx = np.argsort(pt, axis=-1)[:,::-1,np.newaxis]
+    pt_idx = np.concatenate(4*[pt_idx], axis=2)
+    jets   = np.take_along_axis(jets, pt_idx, axis=1)
+    if idx == (0,None): return np.reshape(jets, (-1,np.prod(jets.shape[1:])))
+    else: return_dict[idx]  =  np.reshape(jets, (-1,np.prod(jets.shape[1:])))
+def jets_sorting_mp(jets):
+    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
+    processes = [mp.Process(target=jets_sorting, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    return np.concatenate([return_dict[key] for key in idx_tuples], axis=0)
+
+
+def n_constituents(jets):
+    def get_number(jets, idx, return_dict):
+        jets = np.sum(np.reshape(np.abs(np.float32(jets)), (-1,int(jets.shape[1]/4),4)), axis=2)
+        jets = np.hstack([jets, np.zeros((jets.shape[0],1))])
+        jets = np.sort(jets, axis=-1)[:,::-1]
+        return_dict[idx] = np.argmin(jets, axis=1)
+    idx_tuples = get_idx(len(jets), int(mp.cpu_count()/2))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(jets[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
+    processes = [mp.Process(target=get_number, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    return np.concatenate([return_dict[key] for key in idx_tuples])
+
+
+def grid_search(**kwargs):
+    if len(kwargs.items()) <= 1: array_tuple = list(kwargs.values())[0]
+    else                       : array_tuple = list(itertools.product(*kwargs.values()))
+    return dict( zip(np.arange(len(array_tuple)), array_tuple) )
+
+
+'''
+def match_OoD(bkg_sample, OoD_sample, bin_size=10, seed=0):
+    np.random.seed(seed)
+    m_idx = np.argsort(OoD_sample['m'])
+    OoD_sample = {key:np.take(OoD_sample[key], m_idx, axis=0) for key in OoD_sample}
+    m_bkg, m_OoD = bkg_sample['m'], OoD_sample['m']
+    m_bins = get_idx(np.max(m_bkg), None, bin_size, np.min(m_bkg), False, False)
+    OoD_idx = np.searchsorted(m_OoD, m_bins)
+    bkg_idx = np.maximum(np.searchsorted(m_bins, m_bkg), 1)
+    def get_indices(OoD_idx, bkg_idx, idx, return_dict):
+        return_dict[idx] = [np.random.choice(np.arange(OoD_idx[n-1], OoD_idx[n])) for n in bkg_idx]
+    idx_tuples = get_idx(len(bkg_idx), int(mp.cpu_count()/2))
+    manager = mp.Manager(); return_dict = manager.dict()
+    arguments = [(OoD_idx, bkg_idx[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
+    processes = [mp.Process(target=get_indices, args=arg) for arg in arguments]
+    for task in processes: task.start()
+    for task in processes: task.join()
+    indices = np.concatenate([return_dict[key] for key in idx_tuples])
+    return {key:np.take(OoD_sample[key], indices, axis=0) for key in OoD_sample}
+'''

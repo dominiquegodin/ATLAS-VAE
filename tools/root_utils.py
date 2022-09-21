@@ -73,11 +73,19 @@ def get_idx(size, start_val=0, n_sets=8):
     return list(zip(idx_list[:-1], idx_list[1:]))
 
 
+#def transform_jets(jets, idx, return_dict):
+#    for n in np.arange(len(jets)):
+#        jets[n,...] = jet_pt_ordering(jets[n,...])
+#        jets[n,...] = jet_Lorentz_4v (jets[n,...])
+#        jets[n,...] = jet_processing (jets[n,...])
+#    return_dict[idx] = {'constituents':np.float16(np.reshape(jets,(jets.shape[0],-1))),
+#                        **{key:val for key,val in get_4v(jets).items()}}
+# pt ordering after jet processing
 def transform_jets(jets, idx, return_dict):
     for n in np.arange(len(jets)):
-        jets[n,...] = jet_pt_ordering(jets[n,...])
         jets[n,...] = jet_Lorentz_4v (jets[n,...])
         jets[n,...] = jet_processing (jets[n,...])
+        jets[n,...] = jet_pt_ordering(jets[n,...])
     return_dict[idx] = {'constituents':np.float16(np.reshape(jets,(jets.shape[0],-1))),
                         **{key:val for key,val in get_4v(jets).items()}}
 
@@ -90,9 +98,15 @@ def get_4v(sample):
     return {'E':E, 'pt_calo':pt, 'm_calo':M}
 
 
+#def jet_pt_ordering(jet):
+#    pt_idx = np.argsort(jet[:,0])[::-1]
+#    for n in [0,1,2]: jet[:,n] = jet[:,n][pt_idx]
+#    return jet
+# pt ordering after jet processing
 def jet_pt_ordering(jet):
-    pt_idx = np.argsort(jet[:,0])[::-1]
-    for n in [0,1,2]: jet[:,n] = jet[:,n][pt_idx]
+    pt = np.sqrt(jet[:,1]**2 + jet[:,2]**2)
+    pt_idx = np.argsort(pt)[::-1]
+    for n in range(4): jet[:,n] = jet[:,n][pt_idx]
     return jet
 
 

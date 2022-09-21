@@ -4,7 +4,7 @@
 # SLURM OPTIONS (LPS or BELUGA)
 #---------------------------------------------------------------------
 #SBATCH --account=def-arguinj
-#SBATCH --time=00-02:00         #time limit (DD-HH:MM)
+#SBATCH --time=00-08:00         #time limit (DD-HH:MM)
 ##SBATCH --mem=64G               #memory per node (Beluga)
 ##SBATCH --cpus-per-task=4       #CPUs threads per node (Beluga)
 #SBATCH --gres=gpu:1            #GPUs per node
@@ -35,5 +35,5 @@ else
     singularity shell --nv --bind $PATHS $SIF < vae.sh $SLURM_ID $HOST_NAME
 fi
 
-mkdir -p log_files
-mv *.out log_files 2>/dev/null
+mkdir -p outputs/log_files
+mv *.out outputs/log_files 2>/dev/null

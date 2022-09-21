@@ -1,16 +1,17 @@
 import numpy             as np
 import multiprocessing   as mp
 import matplotlib.pyplot as plt
-import os, sys, pickle, warnings
+import os, sys, h5py, time, pickle, warnings
 from matplotlib    import pylab, ticker
 from sklearn       import metrics
 from scipy.spatial import distance
 from functools     import partial
-from utils         import loss_function, latent_loss, inverse_scaler, get_4v, bump_hunter, get_idx
+from utils         import loss_function, latent_loss, inverse_scaler, get_4v, bump_hunter
+from utils         import n_constituents, jets_pt, get_idx
 
 
 def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metric, sig_data, output_dir):
-    print('\nPLOTTING PERFORMANCE RESULTS:')
+    print('PLOTTING PERFORMANCE RESULTS:')
     manager = mp.Manager(); X_losses = manager.dict()
     X_true_dict = {metric:X_true for metric in metrics if metric!='Latent'}
     if False: X_true_dict['Inputs'] = sample['constituents']
@@ -26,13 +27,14 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, wp_metr
     processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
     arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir, best_loss) for metric in metrics]
     processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
+    #processes  = [mp.Process(target=tSNE, args=(y_true,  X_true, model, output_dir))]
     #processes += [mp.Process(target=pt_reconstruction, args=(X_true, X_pred, y_true, sample['weights'], output_dir))]
     for job in processes: job.start()
     for job in processes: job.join()
 
 
 def apply_cuts(y_true, X_true, X_pred, sample, n_dims, model, metric, sig_data, cut_types, output_dir):
-    print('APPLYING CUTS ON SAMPLES:')
+    print('\nAPPLYING CUTS ON SAMPLE:')
     def plot_suppression(sample, sig_data, X_loss, positive_rates, bkg_eff=None, file_name=None):
         cut_sample = make_cut(y_true, X_loss, sample, positive_rates, metric, cut_type, bkg_eff)
         if file_name is None: file_name  = 'bkg_suppression/bkg_eff_' + format(bkg_eff,'1.0e')
@@ -42,19 +44,133 @@ def apply_cuts(y_true, X_true, X_pred, sample, n_dims, model, metric, sig_data, 
     else                 : X_loss = loss_function(X_true, X_pred, n_dims, metric, multiloss=False)
     positive_rates = get_rates(y_true, X_loss, sample['weights'])
     for cut_type in cut_types:
-        if cut_type == 'bkg_eff':
+        if cut_type in ['bkg_eff']:
             processes = [mp.Process(target=plot_suppression, args=(sample, sig_data, X_loss, positive_rates,
                          bkg_eff)) for bkg_eff in [1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]]
             for job in processes: job.start()
             for job in processes: job.join()
         if cut_type in ['gain','sigma']:
-            file_name = 'bkg_suppression/best_' + cut_type
+            file_name = 'bkg_suppression/best_' + cut_type ; print()
             plot_suppression(sample, sig_data, X_loss, positive_rates, file_name=file_name)
+
+
+def tSNE(y_true, X_true, model, output_dir, file_name='tSNE_scatter.pkl'):
+    if not os.path.isfile(output_dir+'/'+file_name):
+        from sklearn.manifold import TSNE
+        z_mean, _, _ = model.encoder(X_true)
+        embedding    = TSNE(n_jobs=-1, random_state=0, perplexity=30, learning_rate=100, verbose=1)
+        z_embedded   = embedding.fit_transform(z_mean)
+        pickle.dump(z_embedded, open(output_dir+'/'+file_name,'wb'), protocol=4)
+    else:
+        z_embedded = pickle.load(open(output_dir+'/'+file_name,'rb'))
+    plt.figure(figsize=(12,8)); pylab.grid(True); ax = plt.gca()
+    labels = [r'$t\bar{t}$', 'QCD']; colors = ['tab:orange', 'tab:blue']
+    for n in set(y_true):
+        x = z_embedded[:,0][y_true==n]
+        y = z_embedded[:,1][y_true==n]
+        plt.scatter(x, y, color=colors[n], s=10, label=labels[n], alpha=0.1)
+    pylab.xlim(-1e-4, 1e-4); pylab.ylim(-1e-4, 1e-4)
+    leg = plt.legend(loc='upper right', fontsize=18)
+    for lh in leg.legendHandles: lh.set_alpha(1)
+    file_name = output_dir+'/'+'tSNE_scatter.png'
+    print('Saving tSNE 2D-embedding to:', file_name); plt.savefig(file_name)
+
+
+def plot_4v_distributions(output_dir, scaler, n_dims=3, normalize=True):
+    from utils import apply_scaler
+    data_path = '/opt/tmp/godin/AD_data'
+    file_dict = {
+                 'top (old)':'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5'             ,
+                 'top (new)':'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M_alltransform.h5',
+                 }
+    plt.figure(figsize=(13,8)); pylab.grid(True); ax = plt.gca()
+    for label in file_dict:
+        data = h5py.File(data_path+'/'+file_dict[label],"r")
+        jets = np.float32(data['constituents'][:900000])
+        if n_dims == 3:
+            """ Using (px, py, px) instead of (E, px, py, px) """
+            shape = jets.shape
+            jets  = np.reshape(jets        , (-1,shape[1]//4,4))
+            jets  = np.reshape(jets[...,1:], (shape[0],-1)     )
+        #jets = apply_scaler(jets, n_dims, scaler)
+        jets = np.reshape(jets, (-1,n_dims))
+        px, py, pz = [jets[:,n] for n in range(jets.shape[-1])]
+        E = np.sqrt(px**2 + py**2 + pz**2)
+        weights = np.ones_like(px, dtype=np.float32)
+        if normalize: weights *= 100/np.sum(weights)
+        bins = np.linspace(-200,1000,200)
+        pylab.hist(px, bins=bins, histtype='step', weights=weights, lw=2, label=label, log=True)
+    pylab.xlim(-200, 1000)
+    pylab.ylim(1e-6, 1e2)
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    ax.tick_params(axis='both', which='major', labelsize=15)
+    plt.xlabel('$p_x$', fontsize=24)
+    plt.ylabel('Distribution'+(' (%)' if normalize else '' ), fontsize=24)
+    plt.legend(loc='upper right', ncol=1, fontsize=18)
+    file_name = output_dir+'/'+'px_distribution.png'
+    print('Saving 4v distribution to:', file_name); plt.savefig(file_name)
+
+
+def plot_mean_pt(output_dir):
+    data_path = '/opt/tmp/godin/AD_data'
+    file_dict = {
+                 'qcd (old)':'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M.h5'        ,
+                 'top (old)':'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5'  ,
+                 'top (new)':'formatted_converted_20211213_ttbar_allhad_pT_450_1200_nevents_10M_fixed.h5',
+                 'H-OoD'    :'H_HpHm_generation_merged_with_masses_20_40_60_80_reformatted_nghia.h5',
+                 }
+    plt.figure(figsize=(13,8)); pylab.grid(True); ax = plt.gca()
+    data    = h5py.File(data_path+'/'+file_dict['top (old)'],"r")
+    n_const = n_constituents(data['constituents'])
+    pt      =        jets_pt(data['constituents'])
+    n_list  = np.linspace(10,100,10, dtype=int)
+    for n in n_list:
+        label = 'n_const $\leqslant$ '+str(n)
+        plt.plot(np.arange(1,n+1), np.mean(pt[n_const<=n][:,:n], axis=0), label=label, lw=2)
+    pylab.xlim(0, 100)
+    pylab.ylim(100, 600)
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    ax.tick_params(axis='both', which='major', labelsize=15)
+    plt.xlabel('Number of Constituents', fontsize=24)
+    plt.ylabel('Mean $p_t$ (GeV)', fontsize=24)
+    plt.legend(loc='lower right', ncol=2, fontsize=16)
+    file_name = output_dir+'/'+'mean_pt.png'
+    print('Saving mean pt plots to:', file_name); plt.savefig(file_name)
+
+
+def plot_constituents(output_dir, normalize=True, log=True):
+    data_path = '/opt/tmp/godin/AD_data'
+    file_dict = {
+                 'qcd (old)':'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M.h5'        ,
+                 'top (old)':'formatted_converted_20210430_ttbar_allhad_pT_450_1200_nevents_1M.h5'  ,
+                 'top (new)':'formatted_converted_20211213_ttbar_allhad_pT_450_1200_nevents_10M_fixed.h5',
+                 'H-OoD'    :'H_HpHm_generation_merged_with_masses_20_40_60_80_reformatted_nghia.h5',
+                 }
+    plt.figure(figsize=(13,8)); pylab.grid(True); ax = plt.gca()
+    histos = []
+    for label in file_dict:
+        data    = h5py.File(data_path+'/'+file_dict[label],"r")
+        n_const = n_constituents(data['constituents'])
+        bins    = np.arange(-0.5,np.max(n_const)+1)
+        weights = np.ones_like(n_const, dtype=np.float32)
+        if normalize: weights *= 100/np.sum(weights)
+        histos += [pylab.hist(n_const, bins=bins, histtype='step', weights=weights, lw=2, label=label)]
+    pylab.xlim(-0.5, 100.5)
+    if log: pylab.ylim(1e-4, 10); plt.yscale('log')
+    #else  : pylab.ylim(0, np.ceil(np.max([np.max(h[0]) for h in histos])))
+    else  : pylab.ylim(0, 2.5)
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    ax.tick_params(axis='both', which='major', labelsize=15)
+    plt.xlabel('Number of Constituents', fontsize=24)
+    plt.ylabel('Distribution'+(' (%)' if normalize else '' ), fontsize=24)
+    plt.legend(loc='lower right' if log else 'upper left' , ncol=1, fontsize=18)
+    file_name = output_dir+'/'+'n_constituents.png'
+    print('Saving constituents distributions to:', file_name); plt.savefig(file_name)
 
 
 def sample_distributions(sample, OoD_data, output_dir, name, weight_type='None', bin_sizes={'m':2.5,'pt':10}):
     processes = [mp.Process(target=plot_distributions, args=(sample, OoD_data, var, bin_sizes,
-                 output_dir, name+'_'+var+'.png', weight_type)) for var in ['m','pt']]
+                 output_dir, name+'_'+var+'.png', weight_type)) for var in ['m','pt']] #,'m_over_pt']]
     for job in processes: job.start()
     for job in processes: job.join()
 
@@ -85,8 +201,8 @@ def best_threshold(y_true, positive_rates, weights, cut_type, min_tpr=1):
 def make_cut(y_true, X_loss, sample, positive_rates, metric, cut_type, bkg_eff=None):
     if bkg_eff is None:
         loss_cut, loss_val = best_threshold(y_true, positive_rates, sample['weights'], cut_type)
-        print('Best', metric, 'cut on '+format(cut_type,'5s')+':', metric, '>=', end= ' ')
-        print(format(loss_cut, '.3f')+' / best '+format(cut_type,'5s'), '=', format(loss_val, '>5.2f'))
+        print('Best', metric, 'cut on '+format(cut_type,'4s')+'  --> ', metric, '>=', end= ' ')
+        print(format(loss_cut, '.3f')+' / best '+format(cut_type,'4s'), '=', format(loss_val, '>4.2f'))
     else:
         fpr, tpr, thresholds = positive_rates
         cut_idx  = np.argmin(abs(fpr-bkg_eff))
@@ -94,7 +210,7 @@ def make_cut(y_true, X_loss, sample, positive_rates, metric, cut_type, bkg_eff=N
     return {key:sample[key][X_loss>loss_cut] for key in sample}
 
 
-def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=20, eff_type='bkg'):
+def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=50, eff_type='bkg'):
     fpr, tpr, thresholds = get_rates(y_true, X_loss, sample['weights'])
     if eff_type == 'sig':
         eff = tpr
@@ -116,6 +232,7 @@ def bump_scan(y_true, X_loss, wp_metric, sample, sig_data, output_dir, n_cuts=20
     thresholds, eff = np.take(thresholds, idx), np.take(eff, idx)
     none_filter = sigma != np.array(None)
     thresholds, eff, sigma = thresholds[none_filter], eff[none_filter], sigma[none_filter]
+    if len(sigma) == 0: return None
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     plt.plot(eff, sigma, label='', color='tab:blue', lw=2, zorder=1)
     factor  = np.floor(np.log10(np.max(sigma)))
@@ -234,7 +351,6 @@ def mass_correlation(y_true, X_losses, X_mass, weights, metrics_list, wp_metric,
     color_dict = {'MSE' :'tab:orange', 'MAE'   :'tab:brown', 'X-S'   :'tab:purple',
                    'JSD':'tab:cyan'  , 'EMD'   :'tab:green', 'KSD'   :'black'     ,
                    'KLD':'tab:red'   , 'Inputs':'gray'     , 'Latent':'tab:blue'}
-    truth = 1
     manager   = mp.Manager(); distance_dict = manager.dict()
     arguments = [(y_true, X_losses, X_mass, weights, metric, eff_type, truth, distance_dict)
                  for metric in metrics_list for truth in [0,1]]
@@ -289,7 +405,7 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, best_loss=No
                  va="center", ha="center", transform=ax.transAxes)
     ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if log: plt.xscale('log'); plt.yscale('log')
-    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.tick_params(axis='both', which='major', labelsize=15)
     label = 'KLD Latent Loss' if metric=='Latent' else metric+' Reconstruction Loss'
     plt.xlabel(label, fontsize=24)
     plt.ylabel('Distribution Density (%)', fontsize=24)
@@ -302,14 +418,16 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, best_loss=No
 
 def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_name='', weight_type='None',
                        normalize=True, density=True, log=True, plot_weights=False):
-    if   'top' in sig_data: tag = r'$t\bar{t}$'
-    elif 'BSM' in sig_data: tag = 'BSM'
-    elif 'OoD' in sig_data: tag = 'OoD'
+    if   'top'  in sig_data: tag = r'$t\bar{t}$'
+    elif 'BSM'  in sig_data: tag = 'BSM'
+    elif 'OoD'  in sig_data: tag = 'OoD'
     elif '2HDM' in sig_data: tag = '2HDM'
+    else                   : tag = 'N.A.'
     if 'OoD' in sig_data: labels = {0:[tag,'QCD'], 1:[tag+' (weighted)','QCD (weighted)']}
     else: labels = {0:[tag,'QCD'], 1:[tag+' (cut)','QCD (cut)']}
     colors = ['tab:orange', 'tab:blue', 'tab:brown']; alphas = [1, 0.5]
-    xlabel = {'pt':'$p_t$', 'm':'$m$', 'rljet_n_constituents':'Number of constituents'}[plot_var]
+    xlabel = {'pt':'$p_t$', 'm':'$m$', 'm_over_pt':'$m\,/\,{p_t}$',
+              'rljet_n_constituents':'Number of constituents'}[plot_var]
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     if not isinstance(samples, list): samples = [samples]
     for m in [0,1]:
@@ -317,10 +435,15 @@ def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_
             sample = samples[n]
             condition = sample['JZW']==-1 if m==0 else sample['JZW']>= 0 if m==1 else sample['JZW']>=-2
             if not np.any(condition): continue
-            variable = np.float32(sample[plot_var][condition])
+            if plot_var == 'm_over_pt':
+                variable = np.float32(sample['m']/sample['pt'])[condition]
+                bin_sizes[plot_var] = 0.01
+            else:
+                variable = np.float32(sample[plot_var][condition])
             weights = sample['weights'][condition]
-            if 'flat' in weight_type: min_val, max_val = max(0, np.min(variable))        , np.max(variable        )
-            else                    : min_val, max_val = max(0, np.min(sample[plot_var])), np.max(sample[plot_var])
+            if plot_var == 'm_over_pt': min_val, max_val = max(0, np.min(variable))        , np.max(variable        )
+            elif 'flat' in weight_type: min_val, max_val = max(0, np.min(variable))        , np.max(variable        )
+            else                      : min_val, max_val = max(0, np.min(sample[plot_var])), np.max(sample[plot_var])
             bins = get_idx(max_val, bin_size=bin_sizes[plot_var], min_val=min_val, integer=False, tuples=False)
             if plot_weights:
                 ''' Printing weights histogram '''
@@ -341,17 +464,19 @@ def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_
         if   plot_var == 'm' : pylab.xlim(0, 1200); pylab.ylim(1e0, 1e5)
         elif plot_var == 'pt': pylab.xlim(0, 3000); pylab.ylim(1e0, 1e5)
     elif 'Geneva' in sig_data:
-        if   plot_var == 'm' : pylab.xlim(0, 700) ; pylab.ylim(1e-2, 1e5)
+        if   plot_var == 'm' : pylab.xlim(0,  600); pylab.ylim(1e-2, 1e5)
         elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e-2, 1e5)
+        elif plot_var == 'm_over_pt': pylab.xlim(0,0.8); pylab.ylim(1e-2, 1e5)
     else:
-        if   plot_var == 'm' : pylab.xlim(0, 500) ; pylab.ylim(1e0, 1e6)
+        if   plot_var == 'm' : pylab.xlim(0,  500); pylab.ylim(1e0, 1e6)
         elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e0, 1e6)
     if normalize:
         if   plot_var == 'm' : pylab.ylim(1e-6, 1e0)
         elif plot_var == 'pt': pylab.ylim(1e-6, 1e0)
+        elif plot_var == 'm_over_pt': pylab.ylim(1e-4, 1e3)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if not log: axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))
-    plt.xlabel(xlabel+' (GeV)', fontsize=24)
+    plt.xlabel(xlabel+(' (GeV)' if plot_var!='m_over_pt' else ''), fontsize=24)
     y_label = ' density' if density else ''
     if normalize: y_label += ' (%)'
     elif sig_data in ['top-UFO','BSM']: y_label += ' ('+r'58.5 fb$^{-1}$'+')'
@@ -361,27 +486,122 @@ def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_
     if file_name == '':
         file_name = (plot_var if plot_var=='pt' else 'mass')+'_dist.png'
     file_name = output_dir+'/'+file_name
-    print('Saving', format(plot_var, '2s'), 'distributions  to:', file_name); plt.savefig(file_name)
+    print('Saving', format(plot_var, '>2s'), 'distributions  to:', file_name); plt.savefig(file_name)
+
+
+def combine_ROC_curves(output_dir):
+    def plot_ROC_curve(file_path):
+        fpr, tpr = pickle.load(open(file_path, 'rb')).values()
+        fpr_0 = np.sum(fpr==0)
+        return fpr[fpr_0:], tpr[fpr_0:]
+    data_path  = '/lcg/storage20/atlas/godin/ATLAS-VAE/jet-ID/outputs/Delphes_new'
+    #file_list  = ['top_10const', 'top_20const', 'top_30const', 'top_40const', 'top_50const',
+    #              'top_60const', 'top_70const', 'top_80const', 'top_90const', 'top_100const']
+    #label_list = [n+ ' const' for n in ['10', '20', '30', '40', '50', '60', '70', '80', '90', '100']]
+    file_list  = ['top_20const', 'top_40const', 'top_60const', 'top_80const', 'top_100const']
+    label_list = [n+ ' const' for n in ['20', '40', '60', '80', '100']]
+    #data_path  = '/lcg/storage20/atlas/godin/ATLAS-VAE/jet-ID/outputs/Atlas'
+    #file_list  = ['top_50const', 'top_100const', 'top_150const', 'top_196const', 'top_50const',
+    #              'top_60const', 'top_70const', 'top_80const', 'top_90const', 'top_100const']
+    #label_list = [n+ ' const' for n in ['50', '100', '150', '200']]
+    file_list  = [data_path+'/'+pkl_file+'/class_0_vs_bkg/pos_rates.pkl' for pkl_file in file_list]
+    pos_rates  = {label:plot_ROC_curve(file_path) for label,file_path in zip(label_list, file_list)}
+    #color_list = 2*['tab:orange', 'tab:blue', 'tab:green', 'tab:green', 'tab:green']
+    plt.figure(figsize=(13,8));  axes = plt.gca()
+    pylab.grid(True, which="both", ls="--", color='tab:blue', alpha=0.2)
+    #for n_zip in list(zip(label_list, color_list))[:5]:
+    #    label, color = n_zip
+    for label in label_list[:5]:
+        fpr, tpr = pos_rates[label]
+        plt.plot(100*tpr, 1/fpr, label=label, lw=2)
+    #Ps = []; labels = []
+    #for n_zip in list(zip(label_list, color_list))[5:]:
+    #    label, color = n_zip
+    #for label in label_list[5:]:
+    #    fpr, tpr = pos_rates[label]
+    #    P, = plt.plot(100*tpr, 1/fpr, label=label, lw=2)
+    #    Ps += [P]; labels += [label]
+    for fpr,tpr in list(pos_rates.values())[:5]:
+        plt.plot(np.nan, np.nan, '.', ms=0, label='(AUC: '+format(metrics.auc(fpr,tpr), '.4f')+')')
+    #for fpr,tpr in list(pos_rates.values())[5:]:
+    #    P, = plt.plot(np.nan, np.nan, '.', ms=0, label='(AUC: '+format(metrics.auc(fpr,tpr), '.4f')+')')
+    #    Ps += [P]; labels += ['(AUC: '+format(metrics.auc(fpr,tpr), '.4f')+')']
+    #L = plt.legend(Ps, labels, loc='lower left', bbox_to_anchor=(0.29,0), fontsize=13, ncol=2,
+    #               columnspacing=-2, facecolor='ghostwhite', framealpha=1)
+    pylab.xlim(0,100); pylab.ylim(1,1e5)
+    plt.yscale('log')
+    plt.xticks(np.linspace(0,100,11))
+    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(2))
+    pos    = [10**int(n) for n in np.arange(0,int(np.log10(axes.get_ylim()[1]))+1)]
+    labels = ['1'] + ['$10^{'+str(n)+'}$' for n in np.arange(1,int(np.log10(axes.get_ylim()[1]))+1)]
+    plt.yticks(pos, labels)
+    plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
+    plt.ylabel('$1/\epsilon_{\operatorname{bkg}}$', fontsize=25)
+    axes.tick_params(axis='both', which='major', labelsize=15)
+    handles, labels = plt.gca().get_legend_handles_labels()
+    #order = [0,1,2,3,4,10,11,12,13,14]
+    #order = [0,1,5,6]
+    #plt.legend([handles[idx] for idx in order], [labels[idx] for idx in order],
+    #           bbox_to_anchor=(0,0), loc='lower left', fontsize=13, ncol=2,
+    #           columnspacing=-2, facecolor='ghostwhite', framealpha=1).set_zorder(10)
+    #plt.gca().add_artist(L)
+    plt.legend(loc='best', fontsize=14, ncol=2, columnspacing=-2,
+               facecolor='ghostwhite', framealpha=1).set_zorder(10)
+    file_name = output_dir + '/' + 'ROC_curves.png'
+    print('Saving ROC curves to:', file_name); plt.savefig(file_name); sys.exit()
 
 
 def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     color_dict = {'MSE' :'tab:orange', 'MAE'   :'tab:brown', 'X-S'   :'tab:purple',
                    'JSD':'tab:cyan'  , 'EMD'   :'tab:green', 'KSD'   :'black'     ,
-                   'KLD':'tab:red'   , 'Inputs':'gray'     , 'Latent':'tab:blue'}
+                   'KLD':'tab:red'   , 'Inputs':'gray'     , 'Latent':'tab:blue'  }
     metrics_dict = ROC_rates(y_true, X_losses, weights, metrics_list)
+
+    if False:
+        #fpr, tpr, _ = metrics_dict['Latent']
+        #pickle.dump({'fpr':fpr, 'tpr':tpr}, open(output_dir+'/'+'pos_rates.pkl','wb'), protocol=4)
+
+        file_path  = '/lcg/storage20/atlas/godin/ATLAS-VAE/e-ID_framework'
+        file_path += '/outputs/top_100const/class_0_vs_bkg/pos_rates.pkl'
+        fpr, tpr = pickle.load(open(file_path, 'rb')).values()
+        fpr_0 = np.sum(fpr==0)
+        color_dict['Top (supervised)'] = 'tab:blue'
+        metrics_dict['Top (supervised)'] = 100*fpr[fpr_0:], 100*tpr[fpr_0:], None
+
+        file_path  = '/lcg/storage20/atlas/godin/ATLAS-VAE/OE-VAE'
+        file_path += '/outputs/Delphes/KLD-beta1_lamb100_X-S_8m_100const/plots/pos_rates.pkl'
+        fpr, tpr = pickle.load(open(file_path, 'rb')).values()
+        fpr_0 = np.sum(fpr==0)
+        color_dict['Top (OE-VAE)'] = 'tab:blue'
+        metrics_dict['Top (OE-VAE)'] = fpr[fpr_0:], tpr[fpr_0:], None
+
+        file_path  = '/lcg/storage20/atlas/godin/ATLAS-VAE/e-ID_framework'
+        file_path += '/outputs/2HDM_100const/class_0_vs_bkg/pos_rates.pkl'
+        fpr, tpr = pickle.load(open(file_path, 'rb')).values()
+        fpr_0 = np.sum(fpr==0)
+        color_dict['2HDM (supervised)'] = 'tab:cyan'
+        metrics_dict['2HDM (supervised)'] = 100*fpr[fpr_0:], 100*tpr[fpr_0:], None
+
+        color_dict['2HDM (OE-VAE)'] = color_dict.pop('Latent')
+        color_dict['2HDM (OE-VAE)'] = 'tab:cyan'
+        metrics_dict['2HDM (OE-VAE)'] = metrics_dict.pop('Latent')
+
+        ls_dict = {'Top (supervised)':'--', 'Top (OE-VAE)':'-', '2HDM (supervised)':'--', '2HDM (OE-VAE)':'-'}
+
     """ Background rejection plot """
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     bkg_rej_max = 0
-    for metric in metrics_list:
+    for metric in metrics_dict:
         fpr, tpr, _ = metrics_dict[metric]
         bkg_rej_max = max(bkg_rej_max, np.max(100/fpr))
         #plt.text(0.98, 0.65-4*metrics_list.index(metric)/100, 'AUC: '+format(metrics.auc(fpr,tpr)/1e4, '.3f'),
         #         {'color':color_dict[metric], 'fontsize':14}, va='center', ha='right', transform=axes.transAxes)
         plt.plot(tpr, 100/fpr, label=metric, lw=2, color=color_dict[metric])
-    for metric in metrics_list:
+        #plt.plot(tpr, 100/fpr, label=metric, lw=2, color=color_dict[metric], ls=ls_dict[metric])
+    for metric in metrics_dict:
         fpr, tpr, _ = metrics_dict[metric]
         plt.plot(np.nan, np.nan, '.', ms=0, label='(AUC: '+format(metrics.auc(fpr,tpr)/1e4, '.3f')+')')
-    metrics_scores = [metrics_dict[metric][:2] for metric in metrics_list]
+    metrics_scores = [metrics_dict[metric][:2] for metric in metrics_dict]
     y_max = 10**(1+np.ceil(np.log10(bkg_rej_max)))
     pylab.xlim(0,100); pylab.ylim(1,y_max)
     for wp in wps:
@@ -400,7 +620,7 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     plt.yticks(pos, labels)
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('$1/\epsilon_{\operatorname{bkg}}$', fontsize=25)
-    axes.tick_params(axis='both', which='major', labelsize=14)
+    axes.tick_params(axis='both', which='major', labelsize=15)
     plt.legend(loc='best', fontsize=15, ncol=2, columnspacing=-2,
                facecolor='ghostwhite', framealpha=1).set_zorder(10)
     file_name = output_dir + '/' + 'bkg_rejection.png'
@@ -408,27 +628,31 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     """ Signal gain plot """
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     max_ROC_var = 0
-    for metric in metrics_list:
+    for metric in metrics_dict:
         fpr, tpr, _ = metrics_dict[metric]
         ROC_var  = tpr/fpr
         max_ROC_var = max(max_ROC_var, np.max(ROC_var[tpr>=1]))
         plt.plot(tpr, ROC_var, label=metric, lw=2, color=color_dict[metric])
-    pylab.xlim(1,100)
-    pylab.ylim(0,np.ceil(max_ROC_var))
-    plt.xscale('log')
-    plt.xticks([1,10,100], ['1','10', '100'])
-    axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+        #plt.plot(tpr, ROC_var, label=metric, lw=2, color=color_dict[metric], ls=ls_dict[metric])
+    #pylab.xlim(1,100)
+    #pylab.ylim(0,np.ceil(max_ROC_var))
+    #plt.xscale('log')
+    #plt.xticks([1,10,100], ['1','10', '100'])
+    #axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+    pylab.xlim(0,100)
+    pylab.ylim(1,1e6)
+    plt.yscale('log')
     location = 'upper right'
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('$G_{S/B}=\epsilon_{\operatorname{sig}}/\epsilon_{\operatorname{bkg}}$', fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=15)
-    plt.legend(loc='upper left', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
+    plt.legend(loc='best', fontsize=15, ncol=1, facecolor='ghostwhite', framealpha=1).set_zorder(10)
     file_name = output_dir + '/' + 'signal_gain.png'
     print('Saving signal gain       to:', file_name); plt.savefig(file_name)
     """ Significance plot """
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
     max_ROC_var = 0
-    for metric in metrics_list:
+    for metric in metrics_dict:
         fpr, tpr, _ = metrics_dict[metric]
         n_sig = np.sum(weights[y_true==0])
         n_bkg = np.sum(weights[y_true==1])
@@ -447,7 +671,7 @@ def ROC_curves(y_true, X_losses, weights, metrics_list, output_dir, wps=[1,10]):
     plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=25)
     plt.ylabel('$\sigma=n_{\operatorname{sig}}\epsilon_{\operatorname{sig}}$/'
                +'$\sqrt{n_{\operatorname{bkg}}\epsilon_{\operatorname{bkg}}}$', fontsize=25)
-    axes.tick_params(axis='both', which='major', labelsize=14)
+    axes.tick_params(axis='both', which='major', labelsize=15)
     plt.legend(loc='upper left', fontsize=15, ncol=2 if len(metrics_list)<9 else 3)
     file_name = output_dir + '/' + 'significance.png'
     print('Saving significance      to:', file_name); plt.savefig(file_name)
@@ -474,7 +698,7 @@ def plot_history(hist_file, output_dir, first_epoch=0, x_step=10):
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator())
     pylab.ylim(0, min(50, np.max(losses['Train loss'][1:])))
     plt.xlabel('Epoch', fontsize=25)
-    plt.ylabel('Loss', fontsize=25)
+    plt.ylabel('Loss' , fontsize=25)
     axes.tick_params(axis='both', which='major', labelsize=14)
     plt.legend(loc='upper right', fontsize=18)
     file_name = output_dir+ '/'+ 'train_history.png'
@@ -531,6 +755,42 @@ def KS_distance(dist_1, dist_2, weights_1=None, weights_2=None):
     cdf_1     = weights_1[tuple([np.searchsorted(dist_1, dist_all, side='right')])]
     cdf_2     = weights_2[tuple([np.searchsorted(dist_2, dist_all, side='right')])]
     return np.max(np.abs(cdf_1 - cdf_2))
+
+
+def bin_meshgrid(beta_val, lamb_val, Z_val, file_name, vmin=None, vmax=None, color='black', prec=2):
+    beta_val, lamb_val = [[int(n) if int(n)==n else format(n,'.1f') for n in array]
+                          for array in [beta_val, lamb_val]]
+    beta_idx = np.arange(0, len(beta_val)+1) - 0.5
+    lamb_idx = np.arange(0, len(lamb_val)+1) - 0.5
+    plt.figure(figsize=(11,7.5)); ax = plt.gca()
+    if vmin is None: vmin = np.min(Z_val[Z_val!=-1])
+    if vmax is None: vmax = np.max(Z_val[Z_val!=-1])
+    plt.pcolormesh(beta_idx, lamb_idx, Z_val, cmap="Blues"  , edgecolors='black', vmin=vmin, vmax=vmax)
+    #plt.pcolormesh(beta_idx, lamb_idx, Z_val, cmap="Blues_r", edgecolors='black', vmin=vmin, vmax=vmax)
+    plt.xticks(np.arange(len(beta_val)), beta_val)
+    plt.yticks(np.arange(len(lamb_val)), lamb_val)
+    for x in range(len(beta_val)):
+        for y in range(len(lamb_val)):
+            text = 'Ind' if Z_val[y,x]==-1 else format(Z_val[y,x],'.'+str(prec)+'f')
+            plt.text(x, y, text, {'color':color, 'fontsize':18}, ha='center', va='center')
+    #ax.set_xticks(beta_idx, minor=True)
+    #ax.set_yticks(lamb_idx, minor=True)
+    #plt.grid(True, color='black', lw=1, alpha=1, which='minor')
+    #for val in beta_idx: ax.axvline(val, ymin=0, ymax=1, ls='-', linewidth=1, color='black', zorder=100)
+    #for val in lamb_idx: ax.axhline(val, xmin=0, xmax=1, ls='-', linewidth=1, color='black', zorder=100)
+    plt.tick_params(axis='both', which='major', labelsize=14)
+    plt.xlabel('Beta'  , fontsize=25)
+    plt.ylabel('Lambda', fontsize=25)
+    cbar = plt.colorbar(fraction=0.04, pad=0.02)
+    ticks = [val for val in cbar.get_ticks() if min(abs(val-vmin),abs(val-vmax))>0.02*(vmax-vmin)
+             and round(val,1)!=round(vmin,1) and round(val,1)!=round(vmax,1)]
+    ticks = [vmin] + ticks + [vmax]
+    cbar.set_ticks(ticks)
+    cbar.set_ticklabels([format(n,'.1f') for n in ticks])
+    cbar.ax.tick_params(labelsize=12)
+    plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color=color)
+    plt.tight_layout()
+    print('Saving meshgrid to:', file_name); plt.savefig(file_name)
 
 
 '''

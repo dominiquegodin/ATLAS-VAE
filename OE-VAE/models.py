@@ -1,7 +1,7 @@
 import numpy      as np
 import tensorflow as tf
 import h5py, time, sys, os, pickle
-from tensorflow.keras import layers, models
+from   tensorflow.keras import layers, models, initializers
 
 
 class Encoder(layers.Layer):
@@ -9,7 +9,11 @@ class Encoder(layers.Layer):
     def __init__(self, FC_layers, activation, seed=None, name="encoder", **kwargs):
         super(Encoder, self).__init__(name=name, **kwargs)
         self.FC_layers = FC_layers[:-1]; self.seed = seed
-        self.denses = [layers.Dense(n_neurons, activation=activation) for n_neurons in self.FC_layers]
+        self.denses = [layers.Dense(n_neurons,
+                                    activation=activation,
+                                    kernel_initializer=initializers.he_normal(),
+                                    bias_initializer=tf.random.normal)
+                       for n_neurons in self.FC_layers]
         self.dense_mean    = layers.Dense(FC_layers[-1])
         self.dense_log_var = layers.Dense(FC_layers[-1])
         self.sampling = Sampling()
@@ -27,7 +31,11 @@ class Decoder(layers.Layer):
     def __init__(self, FC_layers, output_dim, activation, name="decoder", **kwargs):
         super(Decoder, self).__init__(name=name, **kwargs)
         self.FC_layers = FC_layers[:-1][::-1]
-        self.denses = [layers.Dense(n_neurons, activation=activation) for n_neurons in self.FC_layers]
+        self.denses = [layers.Dense(n_neurons,
+                                    activation=activation,
+                                    kernel_initializer=initializers.he_normal(),
+                                    bias_initializer=tf.random.normal)
+                       for n_neurons in self.FC_layers]
         self.dense_output = layers.Dense(output_dim, activation='linear')
     def call(self, x):
         for dense in self.denses:
@@ -48,7 +56,7 @@ class VariationalAutoEncoder(models.Model):
         """ Clipping bad reconstruction """
         reconstructed = clip_values(reconstructed, max_val=1e6)
         """ Adding KLD regularization loss """
-        self.add_loss( KLD_loss(z_mean, z_log_var) )
+        self.add_loss( get_KLD_loss(z_mean, z_log_var) )
         return reconstructed
 
 
@@ -63,52 +71,56 @@ class Sampling(layers.Layer):
         return tf.random.normal(tf.shape(z_mean), mean=z_mean, stddev=sigma, seed=seed)
 
 
-def KLD_loss(z_mean, z_log_var):
+def get_KLD_loss(z_mean, z_log_var):
     """ Calculating latent layer KLD loss """
     z_exp_log_var = tf.exp(z_log_var)
     z_exp_log_var = clip_values(z_exp_log_var, max_val=1e6)
     return -tf.reduce_mean(1 + z_log_var - z_exp_log_var - tf.square(z_mean), axis=-1)/2
 
 
-def OE_loss(vae, batch_X, batch_X_OE, OE_type, margin=2):
+def get_OE_loss(vae, batch_X, batch_X_OE, bkg_weights, OoD_weights, OE_type, margin):
     """ Calculating outlier KLD loss """
     if OE_type == 'KLD':
-        z_mean   , z_log_var   , _ = vae.encoder(batch_X)
+        z_mean   , z_log_var   , _ = vae.encoder(batch_X   )
         z_mean_OE, z_log_var_OE, _ = vae.encoder(batch_X_OE)
-        loss = KLD_loss(z_mean, z_log_var) - KLD_loss(z_mean_OE, z_log_var_OE) + margin
-        #loss = KLD_loss(z_mean, z_log_var)*factor - KLD_loss(z_mean_OE, z_log_var_OE)
-        return tf.keras.activations.relu(loss)
+        loss_KLD    = get_KLD_loss(z_mean   , z_log_var   )
+        loss_KLD_OE = get_KLD_loss(z_mean_OE, z_log_var_OE)
+        #return tf.math.multiply( tf.keras.activations.relu(loss_KLD - loss_KLD_OE + margin), OoD_weights )
+        #loss_KLD    = tf.math.multiply(loss_KLD   , bkg_weights)
+        #loss_KLD_OE = tf.math.multiply(loss_KLD_OE, OoD_weights)
+        return tf.keras.activations.relu(loss_KLD - loss_KLD_OE + margin)
     """ Calculating outlier MSE loss """
-    reconstructed    = vae(batch_X)
+    reconstructed    = vae(batch_X   )
     reconstructed_OE = vae(batch_X_OE)
-    loss_MSE    = tf.keras.losses.MSE(batch_X   , reconstructed)
+    loss_MSE    = tf.keras.losses.MSE(batch_X   , reconstructed   )
     loss_MSE_OE = tf.keras.losses.MSE(batch_X_OE, reconstructed_OE)
     if OE_type == 'MSE':
-        return tf.keras.activations.sigmoid(loss_MSE - loss_MSE_OE)
+        return tf.keras.activations.sigmoid(loss_MSE - loss_MSE_OE         )
     if OE_type == 'MSE-margin':
-        return tf.keras.activations.relu(loss_MSE - loss_MSE_OE + margin)
+        return tf.keras.activations.relu   (loss_MSE - loss_MSE_OE + margin)
 
 
-def get_losses(vae, data, OE_type, beta, lamb):
+def get_losses(vae, data, OE_type, beta, lamb, margin):
     bkg_sample , OoD_sample  = data
     bkg_batch_X, bkg_weights = bkg_sample['constituents'], bkg_sample['weights']
     OoD_batch_X, OoD_weights = OoD_sample['constituents'], OoD_sample['weights']
-    reconstructed = vae(bkg_batch_X)
     """ MSE reconstruction loss """
-    MSE_loss = tf.keras.losses.MSE(bkg_batch_X, reconstructed)
-    MSE_loss = tf.math.multiply(MSE_loss, bkg_weights)
+    reconstructed = vae(bkg_batch_X)
+    loss_MSE = tf.keras.losses.MSE(bkg_batch_X, reconstructed)
+    loss_MSE = tf.math.multiply(loss_MSE, bkg_weights)
     """ KLD regularization loss """
-    KLD_loss = beta * sum(vae.losses)
-    KLD_loss = tf.math.multiply(KLD_loss, bkg_weights)
+    loss_KLD = sum(vae.losses)
+    loss_KLD = beta * tf.math.multiply(loss_KLD, bkg_weights)
     """ OE decorrelation loss   """
-    OoD_loss = lamb * OE_loss(vae, bkg_batch_X, OoD_batch_X, OE_type)
-    OoD_loss = tf.math.multiply(OoD_loss, OoD_weights*len(OoD_weights)/np.sum(OoD_weights))
+    loss_OoD = lamb * get_OE_loss(vae, bkg_batch_X, OoD_batch_X, bkg_weights, OoD_weights, OE_type, margin)
+    #loss_OoD = OE_loss(vae, bkg_batch_X, OoD_batch_X, OE_type)
+    #loss_OoD = tf.math.multiply(loss_OoD, OoD_weights) * lamb
     """ Total training loss     """
-    return MSE_loss, KLD_loss, OoD_loss, MSE_loss + KLD_loss + OoD_loss
+    return loss_MSE, loss_KLD, loss_OoD, loss_MSE + loss_KLD + loss_OoD
 
 
 def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batch_size=5000,
-                beta=0, lamb=0, lr=1e-3, hist_file=None, model_in=None, model_out=None):
+                beta=0, lamb=0, margin=0, lr=1e-3, hist_file=None, model_in=None, model_out=None):
     """ Using subclassing Tensoflow API to build model """
     optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
     try   : train_dataset_len = tf.data.experimental.cardinality(train_sample).numpy()
@@ -127,7 +139,7 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
     metric_train = tf.keras.metrics.Mean()
     metric_valid = tf.keras.metrics.Mean()
     """ Iterating over epochs """
-    print('\nSTARTING TRAINING (generator '+('OFF' if train_dataset_len==1 else 'ON') +')')
+    print('STARTING TRAINING (generator '+('OFF' if train_dataset_len==1 else 'ON') +')')
     history = {'MSE':[],'KLD':[],'OE':[],'Train loss':[],'Valid loss':[]}
     if hist_file is not None and os.path.isfile(hist_file) and os.path.isfile(model_in):
         history = pickle.load(open(hist_file, 'rb'))
@@ -151,7 +163,7 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
                 idx  = batch_idx*batch_size, min((batch_idx+1)*batch_size, train_size)
                 data = [{key:sample[key][idx[0]:idx[1]] for key in sample} for sample in train_data]
                 with tf.GradientTape() as tape:
-                    loss_MSE, loss_KLD, loss_OE, loss_train = get_losses(vae, data, OE_type, beta, lamb)
+                    loss_MSE, loss_KLD, loss_OE, loss_train = get_losses(vae, data, OE_type, beta, lamb, margin)
                 grads = tape.gradient(loss_train, vae.trainable_weights)
                 """ Clipping bad gradients """
                 grads = [clip_values(val, max_val=1e6) for val in grads]
@@ -171,7 +183,7 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
                         end, flush = ('\r', False)  if condition and key == 'Train loss' else ('  ', True)
                         print(key + ' = ' + format(val,'4.3e'), end=end, flush=True)
         for valid_data in valid_sample:
-            valid_loss = get_losses(vae, valid_data, OE_type, beta, lamb)[-1]
+            valid_loss = get_losses(vae, valid_data, OE_type, beta, lamb, margin)[-1]
             metric_valid(valid_loss)
         losses['Valid loss'] = metric_valid.result()
         print('Valid loss = ' + format(losses['Valid loss'],'4.3e'), end='  ', flush=True)
