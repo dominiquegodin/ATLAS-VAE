@@ -29,15 +29,16 @@ def get_file(data_type, host_name='atlas'):
 
 
 class Batch_Generator(tf.keras.utils.Sequence):
-    def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg=[0,1], n_OoD=[0,1], bkg_cuts='', OoD_cuts='',
-                 weight_type='X-S', bin_sizes=None , scaler=None, output_dir=None, memGB=30):
-        self.bkg_data    = bkg_data    ; self.OoD_data   = OoD_data
-        self.n_const     = n_const     ; self.n_dims     = n_dims
-        self.n_bkg       = n_bkg       ; self.bkg_cuts   = bkg_cuts
-        self.weight_type = weight_type ; self.bin_sizes  = bin_sizes
-        self.scaler      = scaler      ; self.output_dir = output_dir
-        self.load_size  = min( np.diff(self.n_bkg)[0], int(1e9*memGB/self.n_const/self.n_dims/4) )
-        self.OoD_sample = load_data(OoD_data, n_OoD, OoD_cuts, n_const, n_dims)
+    def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg=[0,1], n_OoD=[0,1], weight_type='X-S',
+                 cuts='', multithread=True, bin_sizes=None , scaler=None, output_dir=None, memGB=30):
+        self.bkg_data   = bkg_data  ; self.OoD_data    = OoD_data
+        self.n_const    = n_const   ; self.n_dims      = n_dims
+        self.n_bkg      = n_bkg     ; self.weight_type = weight_type
+        self.cuts       = cuts      ; self.multithread = multithread
+        self.bin_sizes  = bin_sizes ; self.scaler      = scaler
+        self.output_dir = output_dir
+        self.load_size  = min( np.diff(n_bkg)[0], int(1e9*memGB/n_const/n_dims/4) )
+        self.OoD_sample = load_data(OoD_data, n_OoD, cuts, n_const, n_dims)
     def __len__(self):
         """ Number of batches per epoch """
         return int(np.ceil(np.diff(self.n_bkg)[0]/self.load_size))
@@ -46,11 +47,11 @@ class Batch_Generator(tf.keras.utils.Sequence):
         else                          : print('\nLoading validation sample'.upper())
         bkg_idx = gen_idx*self.load_size  , (gen_idx+1)*self.load_size
         bkg_idx = bkg_idx[0]+self.n_bkg[0], min( bkg_idx[1]+self.n_bkg[0], self.n_bkg[1] )
-        bkg_sample = load_data(self.bkg_data, bkg_idx, self.bkg_cuts, self.n_const, self.n_dims)
+        bkg_sample = load_data(self.bkg_data, bkg_idx, self.cuts, self.n_const, self.n_dims)
         #OoD_sample = OoD_sampling(self.OoD_sample, len(list(bkg_sample.values())[0]))
-        OoD_sample = self.OoD_sample if self.n_bkg==[0,1] else OoD_pairing(bkg_sample, self.OoD_sample)
+        OoD_sample = OoD_pairing(bkg_sample, self.OoD_sample, False if self.n_bkg==[0,1] else self.multithread)
         if self.scaler is not None:
-            scale_sample = apply_scaling #apply_scaler (multiprocess)
+            scale_sample = apply_scaling #For multithreading --> apply_scaler
             bkg_sample['constituents'] = scale_sample(bkg_sample['constituents'], self.n_dims, self.scaler, 'QCD')
             OoD_sample['constituents'] = scale_sample(OoD_sample['constituents'], self.n_dims, self.scaler, 'OoD')
             print()
@@ -63,7 +64,7 @@ class Batch_Generator(tf.keras.utils.Sequence):
         return bkg_sample, OoD_sample
 
 
-def OoD_coupling(sample, target_size, adjust_weights=False, seed=None):
+def OoD_sampling(sample, target_size, adjust_weights=False, seed=None):
     np.random.seed(seed)
     source_size = len(list(sample.values())[0])
     indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
@@ -71,7 +72,7 @@ def OoD_coupling(sample, target_size, adjust_weights=False, seed=None):
     return {key:np.take(sample[key], indices, axis=0) for key in sample}
 
 
-def OoD_pairing(bkg_sample, OoD_sample, seed=0, verbose=True):
+def OoD_pairing(bkg_sample, OoD_sample, multithread=True, verbose=True, seed=0):
     np.random.seed(seed)
     m_idx = np.argsort(OoD_sample['m'])
     OoD_sample = {key:np.take(OoD_sample[key], m_idx, axis=0) for key in OoD_sample}
@@ -90,15 +91,20 @@ def OoD_pairing(bkg_sample, OoD_sample, seed=0, verbose=True):
             if np.sum(cuts) == 0:  m_width *= factor
             else                : return np.random.choice(np.where(cuts)[0]) + idx
     def get_indices(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict=None):
-        return_dict[idx] = [get_indice(m_OoD, pt_OoD, m_bkg[n], pt_bkg[n]) for n in range(idx[0], idx[1])]
+        indices = [get_indice(m_OoD, pt_OoD, m_bkg[n], pt_bkg[n]) for n in range(idx[0], idx[1])]
+        if return_dict is None: return indices
+        else:       return_dict[idx] = indices
     if verbose: print('Coupling    OoD to QCD', end=' ', flush=True); start_time = time.time()
-    idx_tuples = get_idx(len(m_bkg), min(mp.cpu_count(),16))
-    manager = mp.Manager(); return_dict = manager.dict()
-    arguments = [(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict) for idx in idx_tuples]
-    processes = [mp.Process(target=get_indices, args=arg) for arg in arguments]
-    for task in processes: task.start()
-    for task in processes: task.join()
-    indices = np.concatenate([return_dict[key] for key in idx_tuples])
+    if multithread:
+        manager = mp.Manager(); return_dict = manager.dict()
+        idx_tuples = get_idx(len(m_bkg), min(mp.cpu_count(),16))
+        arguments = [(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict) for idx in idx_tuples]
+        processes = [mp.Process(target=get_indices, args=arg) for arg in arguments]
+        for task in processes: task.start()
+        for task in processes: task.join()
+        indices = np.concatenate([return_dict[key] for key in idx_tuples])
+    else:
+        indices = get_indices(m_bkg, pt_bkg, m_OoD, pt_OoD, (0,len(m_bkg)))
     if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return {key:np.take(OoD_sample[key], indices, axis=0) for key in OoD_sample}
 

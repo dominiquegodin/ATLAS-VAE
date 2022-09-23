@@ -29,13 +29,13 @@ parser.add_argument( '--margin'      , default = 0            , type = float    
 parser.add_argument( '--n_iter'      , default = 1            , type = int           )
 parser.add_argument( '--OE_type'     , default = 'KLD'                               )
 parser.add_argument( '--weight_type' , default = 'X-S'                               )
-parser.add_argument( '--output_dir'  , default = 'outputs'                           )
 parser.add_argument( '--model_in'    , default = ''                                  )
 parser.add_argument( '--model_out'   , default = 'model.h5'                          )
 parser.add_argument( '--scaler_in'   , default = ''                                  )
 parser.add_argument( '--scaler_out'  , default = 'scaler.pkl'                        )
-parser.add_argument( '--scaler_type' , default = 'RobustScaler'                      )
 parser.add_argument( '--hist_file'   , default = 'history.pkl'                       )
+parser.add_argument( '--output_dir'  , default = 'outputs'                           )
+parser.add_argument( '--scaler_type' , default = 'RobustScaler'                      )
 parser.add_argument( '--plotting'    , default = 'OFF'                               )
 parser.add_argument( '--apply_cut'   , default = 'OFF'                               )
 parser.add_argument( '--cut_types'   , default = ['bkg_eff','gain'],        nargs='+')
@@ -68,6 +68,7 @@ valid_cuts = ['(sample["pt"] <= 3000)'] + gen_cuts
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' #Suppressing Tensorflow warnings
 seed  = None if (args.n_epochs > 0 or args.n_iter > 1) else 0
 model = VariationalAutoEncoder(args.FC_layers, args.n_dims*args.n_const, seed=seed)
+multithread = True ; scaler = None
 if args.model_in != args.output_dir[0:args.output_dir.rfind('/')]+'/':
     if not os.path.isfile(args.model_in): sys.exit()
     print('\nLoading pre-trained weights from:', args.model_in,)
@@ -76,10 +77,10 @@ if args.model_in != args.output_dir[0:args.output_dir.rfind('/')]+'/':
     train_model(model, sample, sample)
     sys.stdout = sys.__stdout__          #Resuming screen output
     model.load_weights(args.model_in)
+    multithread = False
 if args.scaler_type.lower() != 'none' and os.path.isfile(args.scaler_in):
     print('\nLoading scaler transform from:', args.scaler_in)
     scaler = pickle.load(open(args.scaler_in, 'rb'))
-else: scaler = None
 
 
 # MODEL TRAINING
@@ -89,9 +90,9 @@ if args.n_epochs > 0:
         scaler = fit_scaler(train_sample['constituents'], args.n_dims, args.scaler_out, args.scaler_type)
     bin_sizes = {'m':20,'pt':40} if args.weight_type.split('_')[0] in ['flat','OoD'] else {'m':10,'pt':20}
     train_sample = Batch_Generator(bkg_data, OoD_data, args.n_const, args.n_dims, args.n_train, args.n_OoD,
-                                   train_cuts, train_cuts, args.weight_type, bin_sizes, scaler, args.output_dir)
+                                   args.weight_type, train_cuts, multithread, bin_sizes, scaler, args.output_dir)
     valid_sample = Batch_Generator(bkg_data, OoD_data, args.n_const, args.n_dims, args.n_valid, args.n_OoD,
-                                   train_cuts, train_cuts, args.weight_type, bin_sizes, scaler)
+                                   args.weight_type, train_cuts, multithread, bin_sizes, scaler)
     train_model(model, train_sample, valid_sample, args.OE_type, args.n_epochs, args.batch_size, args.beta,
                 args.lamb, args.margin, args.lr, args.hist_file, args.model_in, args.model_out)
     model.load_weights(args.model_out)

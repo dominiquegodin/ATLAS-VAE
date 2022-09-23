@@ -189,23 +189,30 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
         print('Valid loss = ' + format(losses['Valid loss'],'4.3e'), end='  ', flush=True)
         print('(', '\b' + format(time.time() - start_time, '.1f'), '\b' + 's)')
         for key in history: history[key] += [losses[key].numpy() if key in losses else 0]
-        if epoch > 0: optimizer, count = model_checkpoint(vae, optimizer, history, model_out, count)
-        elif model_out is not None: vae.save_weights(model_out)
         if hist_file is not None: pickle.dump(history, open(hist_file,'wb'))
+        if epoch > 0:
+            optimizer, count = model_checkpoint(vae, optimizer, history, model_out, count)
+            if count is None: break
 
 
-def model_checkpoint(vae, optimizer, history, model_out, count, metric='Train loss', patience=3, factor=2):
-    if history[metric][-1] < np.min(history[metric][:-1]):
+def model_checkpoint(vae, optimizer, history, model_out, count, metric='Train loss',
+                     patience=3, factor=2, min_delta=1e-2, min_lr=5e-5):
+    if history[metric][-1] < np.min(history[metric][:-1]) - min_delta:
         print(metric, 'improved from', format(np.min(history[metric][:-1]),'4.2f'), end=' to ', flush=True)
-        print(format(history[metric][-1],'4.2f'), '--> saving model weights to',  model_out)
+        print(format(history[metric][-1],'4.2f'), ' -->  saving model weights to',  model_out)
         vae.save_weights(model_out); count = 0
-    elif history[metric][-1] > np.min(history[metric][-(patience+1):-1]):
+    elif history[metric][-1] > np.min(history[metric][-(patience+1):-1]) - min_delta:
         count += 1
     if count >= patience:
-        print('No improvement for', count, 'epochs', end=' --> ', flush=True)
-        print('reducing learning rate from', optimizer.learning_rate.numpy(), end=' to ', flush=True)
-        optimizer.learning_rate = optimizer.learning_rate/factor
-        print(optimizer.learning_rate.numpy()); count = 0
+        print('No improvement for', count, 'epochs', end='  -->  ', flush=True)
+        if optimizer.learning_rate < min_lr:
+            print('terminating training')
+            count = None
+        else:
+            print('reducing learning rate from', optimizer.learning_rate.numpy(), end=' to ', flush=True)
+            optimizer.learning_rate = optimizer.learning_rate/factor
+            print(optimizer.learning_rate.numpy())
+            count = 0
     return optimizer, count
 
 
