@@ -9,8 +9,7 @@ class Encoder(layers.Layer):
     def __init__(self, FC_layers, activation, seed=None, name="encoder", **kwargs):
         super(Encoder, self).__init__(name=name, **kwargs)
         self.FC_layers = FC_layers[:-1]; self.seed = seed
-        self.denses = [layers.Dense(n_neurons,
-                                    activation=activation,
+        self.denses = [layers.Dense(n_neurons, activation=activation,
                                     kernel_initializer=initializers.he_normal(),
                                     bias_initializer=tf.random.normal)
                        for n_neurons in self.FC_layers]
@@ -31,8 +30,7 @@ class Decoder(layers.Layer):
     def __init__(self, FC_layers, output_dim, activation, name="decoder", **kwargs):
         super(Decoder, self).__init__(name=name, **kwargs)
         self.FC_layers = FC_layers[:-1][::-1]
-        self.denses = [layers.Dense(n_neurons,
-                                    activation=activation,
+        self.denses = [layers.Dense(n_neurons, activation=activation,
                                     kernel_initializer=initializers.he_normal(),
                                     bias_initializer=tf.random.normal)
                        for n_neurons in self.FC_layers]
@@ -78,16 +76,14 @@ def get_KLD_loss(z_mean, z_log_var):
     return -tf.reduce_mean(1 + z_log_var - z_exp_log_var - tf.square(z_mean), axis=-1)/2
 
 
-def get_OE_loss(vae, batch_X, batch_X_OE, bkg_weights, OoD_weights, OE_type, margin):
+def get_OE_loss(vae, batch_X, batch_X_OE, OE_type, margin):
     """ Calculating outlier KLD loss """
     if OE_type == 'KLD':
         z_mean   , z_log_var   , _ = vae.encoder(batch_X   )
         z_mean_OE, z_log_var_OE, _ = vae.encoder(batch_X_OE)
         loss_KLD    = get_KLD_loss(z_mean   , z_log_var   )
         loss_KLD_OE = get_KLD_loss(z_mean_OE, z_log_var_OE)
-        #return tf.math.multiply( tf.keras.activations.relu(loss_KLD - loss_KLD_OE + margin), OoD_weights )
-        #loss_KLD    = tf.math.multiply(loss_KLD   , bkg_weights)
-        #loss_KLD_OE = tf.math.multiply(loss_KLD_OE, OoD_weights)
+        #return tf.keras.activations.relu(loss_KLD*factor - loss_KLD_OE)
         return tf.keras.activations.relu(loss_KLD - loss_KLD_OE + margin)
     """ Calculating outlier MSE loss """
     reconstructed    = vae(batch_X   )
@@ -110,13 +106,12 @@ def get_losses(vae, data, OE_type, beta, lamb, margin):
     loss_MSE = tf.math.multiply(loss_MSE, bkg_weights)
     """ KLD regularization loss """
     loss_KLD = sum(vae.losses)
-    loss_KLD = beta * tf.math.multiply(loss_KLD, bkg_weights)
+    loss_KLD = tf.math.multiply(loss_KLD, bkg_weights) * beta
     """ OE decorrelation loss   """
-    loss_OoD = lamb * get_OE_loss(vae, bkg_batch_X, OoD_batch_X, bkg_weights, OoD_weights, OE_type, margin)
-    #loss_OoD = OE_loss(vae, bkg_batch_X, OoD_batch_X, OE_type)
-    #loss_OoD = tf.math.multiply(loss_OoD, OoD_weights) * lamb
+    loss_OoD = get_OE_loss(vae, bkg_batch_X, OoD_batch_X, OE_type, margin)
+    loss_OoD = tf.math.multiply(loss_OoD, OoD_weights) * lamb
     """ Total training loss     """
-    return loss_MSE, loss_KLD, loss_OoD, loss_MSE + loss_KLD + loss_OoD
+    return loss_MSE, loss_KLD, loss_OoD, loss_MSE+loss_KLD+loss_OoD
 
 
 def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batch_size=5000,
@@ -140,7 +135,10 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
     metric_valid = tf.keras.metrics.Mean()
     """ Iterating over epochs """
     print('STARTING TRAINING (generator '+('OFF' if train_dataset_len==1 else 'ON') +')')
-    history = {'MSE':[],'KLD':[],'OE':[],'Train loss':[],'Valid loss':[]}
+    history = {'MSE':[]}
+    if beta != 0: history['KLD'] = []
+    if lamb != 0: history['OE' ] = []
+    history = {**history, 'Train loss':[], 'Valid loss':[]}
     if hist_file is not None and os.path.isfile(hist_file) and os.path.isfile(model_in):
         history = pickle.load(open(hist_file, 'rb'))
     total_batches = 0; count = 0
@@ -196,7 +194,7 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
 
 
 def model_checkpoint(vae, optimizer, history, model_out, count, metric='Train loss',
-                     patience=3, factor=2, min_delta=1e-2, min_lr=5e-5):
+                     patience=3, factor=2, min_delta=1e-3, min_lr=1e-4):
     if history[metric][-1] < np.min(history[metric][:-1]) - min_delta:
         print(metric, 'improved from', format(np.min(history[metric][:-1]),'4.2f'), end=' to ', flush=True)
         print(format(history[metric][-1],'4.2f'), ' -->  saving model weights to',  model_out)
