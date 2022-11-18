@@ -14,7 +14,9 @@ def get_file(data_type, host_name='atlas'):
     data_files = {
                   'qcd-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M_dPhifixed_float32.h5'       ,
                   'top-Geneva' :'formatted_converted_20211213_ttbar_allhad_pT_450_1200_nevents_10M_dPhifixed_float32.h5',
-                  '2HDM-Geneva':'formatted_converted_delphes_H_HpHm_generation_mh2_2000_mhc_200_nevents_1M_float32.h5'  ,
+                  #'2HDM-Geneva':'formatted_converted_delphes_H_HpHm_generation_mh2_2000_mhc_200_nevents_1M_float32.h5'  ,
+                  '2HDM-Geneva':'formatted_converted_delphes_H_HpHm_generation_mh2_5000_mhc_500_nevents_1M_float32.h5'  ,
+                  'VZ-Geneva'  :'formatted_converted_delphes_z_zprime_tt_allhad_MVz_5000_MT_500_nevents_1M_float32.h5'  ,
                   'H-OoD'      :'formatted_converted_Outliers_delphes_H_HpHm_generationredo_float32.h5'                 ,
                   'qcd-Delphes':'Delphes_dijet.h5'   ,
                   'top-Delphes':'Delphes_ttbar.h5'   ,
@@ -31,14 +33,14 @@ def get_file(data_type, host_name='atlas'):
 class Batch_Generator(tf.keras.utils.Sequence):
     def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg=[0,1], n_OoD=[0,1], weight_type='X-S',
                  cuts='', multithread=True, bin_sizes=None , scaler=None, output_dir=None, memGB=30):
-        self.bkg_data   = bkg_data  ; self.OoD_data    = OoD_data
-        self.n_const    = n_const   ; self.n_dims      = n_dims
-        self.n_bkg      = n_bkg     ; self.weight_type = weight_type
-        self.cuts       = cuts      ; self.multithread = multithread
-        self.bin_sizes  = bin_sizes ; self.scaler      = scaler
-        self.output_dir = output_dir
-        self.load_size  = min( np.diff(n_bkg)[0], int(1e9*memGB/n_const/n_dims/4) )
-        self.OoD_sample = load_data(OoD_data, n_OoD, cuts, n_const, n_dims)
+        self.bkg_data    = bkg_data    ; self.OoD_data   = OoD_data
+        self.n_const     = n_const     ; self.n_dims     = n_dims
+        self.n_bkg       = n_bkg       ; self.n_OoD      = n_OoD
+        self.weight_type = weight_type ; self.cuts       = cuts
+        self.multithread = multithread ; self.bin_sizes  = bin_sizes
+        self.scaler      = scaler      ; self.output_dir = output_dir
+        self.load_size   = min( np.diff(n_bkg)[0], int(1e9*memGB/n_const/n_dims/4) )
+        self.OoD_sample  = load_data(self.OoD_data, self.n_OoD, self.cuts, self.n_const, self.n_dims)
     def __len__(self):
         """ Number of batches per epoch """
         return int(np.ceil(np.diff(self.n_bkg)[0]/self.load_size))
@@ -48,15 +50,22 @@ class Batch_Generator(tf.keras.utils.Sequence):
         bkg_idx = gen_idx*self.load_size  , (gen_idx+1)*self.load_size
         bkg_idx = bkg_idx[0]+self.n_bkg[0], min( bkg_idx[1]+self.n_bkg[0], self.n_bkg[1] )
         bkg_sample = load_data(self.bkg_data, bkg_idx, self.cuts, self.n_const, self.n_dims)
-        #OoD_sample = OoD_sampling(self.OoD_sample, len(list(bkg_sample.values())[0]))
-        OoD_sample = OoD_pairing(bkg_sample, self.OoD_sample, False if self.n_bkg==[0,1] else self.multithread)
+        OoD_sample = self.OoD_sample
         if self.scaler is not None:
-            scale_sample = apply_scaling #For multithreading --> apply_scaler
+            scale_sample = apply_scaler #single-thread: apply_scaling ; multi-thread: apply_scaler
             bkg_sample['constituents'] = scale_sample(bkg_sample['constituents'], self.n_dims, self.scaler, 'QCD')
             OoD_sample['constituents'] = scale_sample(OoD_sample['constituents'], self.n_dims, self.scaler, 'OoD')
-            print()
+        #OoD_sample = OoD_sampling(bkg_sample, OoD_sample)
+        OoD_sample = OoD_pairing (bkg_sample, OoD_sample, False if self.n_bkg==[0,1] else self.multithread)
+        print()
         if self.bin_sizes is not None:
             bkg_sample, OoD_sample = reweight_sample(bkg_sample, OoD_sample, self.bin_sizes, self.weight_type)
+            #print(     len(bkg_sample['weights']),    len(OoD_sample['weights']) )
+            #print(  np.sum(bkg_sample['weights']), np.sum(OoD_sample['weights']) )
+            #print(  np.min(bkg_sample['weights']), np.max(bkg_sample['weights']) ,
+            #       np.mean(bkg_sample['weights']), np.std(bkg_sample['weights']) )
+            #print(  np.min(OoD_sample['weights']), np.max(OoD_sample['weights']) ,
+            #       np.mean(OoD_sample['weights']), np.std(OoD_sample['weights']) )
         if self.output_dir is not None and gen_idx == 0:
             from plots import sample_distributions
             sample = {key:np.concatenate([bkg_sample[key], OoD_sample[key]]) for key in ['m','pt','weights','JZW']}
@@ -64,12 +73,13 @@ class Batch_Generator(tf.keras.utils.Sequence):
         return bkg_sample, OoD_sample
 
 
-def OoD_sampling(sample, target_size, adjust_weights=False, seed=None):
+def OoD_sampling(bkg_sample, OoD_sample, adjust_weights=False, seed=None):
     np.random.seed(seed)
-    source_size = len(list(sample.values())[0])
+    source_size = len(list(OoD_sample.values())[0])
+    targe_size  = len(list(bkg_sample.values())[0])
     indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
-    if adjust_weights: sample['weights'] = sample['weights']*np.float32(source_size/target_size)
-    return {key:np.take(sample[key], indices, axis=0) for key in sample}
+    if adjust_weights: OoD_sample['weights'] = OoD_sample['weights']*np.float32(source_size/target_size)
+    return {key:np.take(OoD_ssample[key], indices, axis=0) for key in OoD_ssample}
 
 
 def OoD_pairing(bkg_sample, OoD_sample, multithread=True, verbose=True, seed=0):
@@ -94,7 +104,7 @@ def OoD_pairing(bkg_sample, OoD_sample, multithread=True, verbose=True, seed=0):
         indices = [get_indice(m_OoD, pt_OoD, m_bkg[n], pt_bkg[n]) for n in range(idx[0], idx[1])]
         if return_dict is None: return indices
         else:       return_dict[idx] = indices
-    if verbose: print('Coupling    OoD to QCD', end=' ', flush=True); start_time = time.time()
+    if verbose: print('Pairing   OoD with QCD', end=' ', flush=True); start_time = time.time()
     if multithread:
         manager = mp.Manager(); return_dict = manager.dict()
         idx_tuples = get_idx(len(m_bkg), min(mp.cpu_count(),16))
@@ -110,7 +120,7 @@ def OoD_pairing(bkg_sample, OoD_sample, multithread=True, verbose=True, seed=0):
 
 
 def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
-              adjust_weights=False, verbose=False):
+              adjust_weights=False, verbose=False, pt_scaling=False):
     start_time = time.time()
     if verbose: print('Loading', format(data_type,'<10s'), 'sample', end=' ', flush=True)
     if np.isscalar(idx): idx = (0, idx)
@@ -146,8 +156,9 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
     """ Adjusting weights for cross-section """
     if adjust_weights:
         sample['weights'] = sample['weights']*weights_factors(sample['JZW'], data_file)
-    #""" Scaling (E, px, py, px) with jet pt """
-    #sample['constituents'] = sample['constituents']/sample['pt'][:,np.newaxis]
+    if pt_scaling:
+        """ Scaling (E, px, py, px) with jet pt """
+        sample['constituents'] = sample['constituents']/np.float32(sample['pt'][:,np.newaxis])
     if 'constituents' in sample and n_dims == 3:
         """ Using (px, py, px) instead of (E, px, py, px) """
         shape = sample['constituents'].shape
@@ -158,12 +169,11 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
 
 
 def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, cuts='', n_const=20, n_dims=4,
-                var_list=None, DSIDs=None, adjust_weights=False, verbose=True, shuffling=False):
+                var_list=None, DSIDs=None, adjust_weights=False, shuffling=False, verbose=True):
     sig_sample = load_data(sig_data, sig_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
     bkg_sample = load_data(bkg_data, bkg_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
-    if 'OoD' in sig_data: sig_sample = upsampling(sig_sample, len(list(bkg_sample.values())[0]))
-    sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]])
-              for key in set(bkg_sample)&set(sig_sample)}
+    if 'OoD' in sig_data: sig_sample = OoD_sampling(sig_sample, len(list(bkg_sample.values())[0]))
+    sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]]) for key in set(bkg_sample)&set(sig_sample)}
     if shuffling: sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
     return sample
 
@@ -193,7 +203,7 @@ def merge_losses(losses, history, model_in, output_dir):
 
 def sample_cuts(sample, cuts, DSIDs=None):
     sample_size = len(list(sample.values())[0])
-    cut_list    = [np.full(sample_size, True)]
+    cut_list    = [np.full(sample_size, True, dtype=bool)]
     for cut in cuts:
         try   : cut_list.append(eval(cut))
         except: print('WARNING: invalid cut:' , cut)
@@ -324,7 +334,7 @@ def jets_3v(sample, n_dims, idx=[0,None]):
 
 
 def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=True):
-    if metric in ['KLD', 'X-S', 'JSD']:
+    if metric in ['JSD', 'KLD', 'X-S', 'MARE']:
         P = np.maximum(np.float64(P), delta)
         Q = np.maximum(np.float64(Q), delta)
     if metric in ['Inputs']:
@@ -337,10 +347,11 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
         for task in processes: task.start()
         for task in processes: task.join()
         loss = np.concatenate([return_dict[idx] for idx in idx_tuples])
-    if metric == 'MSE': loss = np.mean(      (P - Q)**2, axis=1)
-    if metric == 'MAE': loss = np.mean(np.abs(P - Q)   , axis=1)
-    if metric == 'KLD': loss = np.mean(P*np.log(P/Q)   , axis=1)
-    if metric == 'X-S': loss = np.mean(P*np.log(1/Q)   , axis=1)
+    if metric == 'MSE' : loss = np.mean(      (P - Q)**2, axis=1)
+    if metric == 'MAE' : loss = np.mean(np.abs(P - Q)   , axis=1)
+    if metric == 'MARE': loss = np.mean(np.abs(P - Q)/P , axis=1)
+    if metric == 'KLD' : loss = np.mean(P*np.log(P/Q)   , axis=1)
+    if metric == 'X-S' : loss = np.mean(P*np.log(1/Q)   , axis=1)
     if multiloss: X_losses[metric] = loss
     else: return loss
 
@@ -357,10 +368,13 @@ def latent_loss(X_true, model):
 
 
 def fit_scaler(sample, n_dims, scaler_out, scaler_type='RobustScaler', reshape=False):
-    print('\nFitting', scaler_type, 'scaler', end=' ', flush=True); start_time = time.time()
+    print('\nFitting', scaler_type, 'scaler', end=' ', flush=True)
+    start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
-    if scaler_type == 'QuantileScaler':
+    if scaler_type == 'QuantileTransformer':
         scaler = preprocessing.QuantileTransformer(output_distribution='normal', n_quantiles=10000, random_state=0)
+    if scaler_type == 'PowerTransformer':
+        scaler = preprocessing.PowerTransformer()
     if scaler_type == 'RobustScaler':
         scaler = preprocessing.RobustScaler()
     if scaler_type == 'MaxAbsScaler':
@@ -371,7 +385,8 @@ def fit_scaler(sample, n_dims, scaler_out, scaler_type='RobustScaler', reshape=F
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
 def apply_scaling(sample, n_dims, scaler, tag, reshape=False, verbose=True, idx=(0,None), return_dict=None):
-    if idx == (0,None) and verbose: print('Applying scaler to '+tag, end=' ', flush=True); start_time = time.time()
+    if idx == (0,None) and verbose: print('Applying scaler to '+tag, end=' ', flush=True)
+    start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     sample = scaler.transform(sample)
@@ -402,8 +417,7 @@ def inverse_scaler(sample, n_dims, scaler, reshape=False):
     return sample
 
 
-def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,700], bins=100,
-#def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,300], bins=50,
+def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,800], bins=100,
                 make_histo=True, print_info=True, logspace=False):
     #import pyBumpHunter as BH; sys.path.append('../')
     #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
@@ -502,25 +516,3 @@ def grid_search(**kwargs):
     if len(kwargs.items()) <= 1: array_tuple = list(kwargs.values())[0]
     else                       : array_tuple = list(itertools.product(*kwargs.values()))
     return dict( zip(np.arange(len(array_tuple)), array_tuple) )
-
-
-'''
-def match_OoD(bkg_sample, OoD_sample, bin_size=10, seed=0):
-    np.random.seed(seed)
-    m_idx = np.argsort(OoD_sample['m'])
-    OoD_sample = {key:np.take(OoD_sample[key], m_idx, axis=0) for key in OoD_sample}
-    m_bkg, m_OoD = bkg_sample['m'], OoD_sample['m']
-    m_bins = get_idx(np.max(m_bkg), None, bin_size, np.min(m_bkg), False, False)
-    OoD_idx = np.searchsorted(m_OoD, m_bins)
-    bkg_idx = np.maximum(np.searchsorted(m_bins, m_bkg), 1)
-    def get_indices(OoD_idx, bkg_idx, idx, return_dict):
-        return_dict[idx] = [np.random.choice(np.arange(OoD_idx[n-1], OoD_idx[n])) for n in bkg_idx]
-    idx_tuples = get_idx(len(bkg_idx), int(mp.cpu_count()/2))
-    manager = mp.Manager(); return_dict = manager.dict()
-    arguments = [(OoD_idx, bkg_idx[idx[0]:idx[1]], idx, return_dict) for idx in idx_tuples]
-    processes = [mp.Process(target=get_indices, args=arg) for arg in arguments]
-    for task in processes: task.start()
-    for task in processes: task.join()
-    indices = np.concatenate([return_dict[key] for key in idx_tuples])
-    return {key:np.take(OoD_sample[key], indices, axis=0) for key in OoD_sample}
-'''
