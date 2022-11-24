@@ -25,8 +25,10 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_me
     """ Adding latent space KLD metric and loss """
     if 'Latent' in metrics: X_losses['Latent'] = latent_loss(X_true, model)
     metrics = list(X_losses.keys())
-    if normal_losses or decorrelation: X_losses = {key:loss_mapping(val) for key,val in X_losses.items()}
-    if decorrelation: X_losses[loss_metric] = mass_decorrelation(y_true, sample['m'], X_losses[loss_metric])
+    if normal_losses == 'ON' or decorrelation == 'ON':
+        X_losses = {key:loss_mapping(val) for key,val in X_losses.items()}
+    if decorrelation == 'ON':
+        X_losses[loss_metric] = mass_decorrelation(y_true, sample['m'], X_losses[loss_metric])
     best_loss  = bump_scan(y_true, X_losses[loss_metric], loss_metric, sample, sig_data, output_dir)
     processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, loss_metric, output_dir)]
@@ -251,14 +253,6 @@ def bump_scan(y_true, X_loss, loss_metric, sample, sig_data, output_dir, n_cuts=
         #eff_val = np.logspace(np.log10(x_min), np.log10(x_max), n_cuts)
         eff_val = np.append(100*inverse_logit(np.linspace(logit(x_min/100),-logit(x_min/100),n_cuts)), 100)
     idx = np.minimum(np.searchsorted(eff, eff_val, side='right'), len(eff)-1)
-
-    #print(eff_val)
-    #print(idx)
-    #print(len(eff), len(thresholds))
-    #print(thresholds[411194])
-    #print(np.sort(X_loss)[::-1])
-    #sys.exit()
-
     sample = {key:sample[key] for key in ['JZW','m','pt','weights']}
     global get_sigma
     def get_sigma(sample, X_loss, thresholds, idx):
@@ -453,6 +447,7 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, best_loss=No
 def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_name='', weight_type='None',
                        normalize=True, density=True, log=True, plot_weights=False):
     if   'top'  in sig_data: tag = r'$t\bar{t}$'
+    elif 'VZ'   in sig_data: tag = r'$t\bar{t}$'
     elif 'BSM'  in sig_data: tag = 'BSM'
     elif 'OoD'  in sig_data: tag = 'OoD'
     elif '2HDM' in sig_data: tag = '2HDM'
