@@ -12,60 +12,52 @@ def get_file(data_type, host_name='atlas'):
     if 'atlas'  in host_name: data_path = '/opt/tmp/godin/AD_data'
     if 'beluga' in host_name: data_path = '/project/def-arguinj/shared/AD_data'
     data_files = {
-                  'qcd-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M_dPhifixed_float32.h5'       ,
+                  'QCD-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M_dPhifixed_float32.h5'       ,
                   'top-Geneva' :'formatted_converted_20211213_ttbar_allhad_pT_450_1200_nevents_10M_dPhifixed_float32.h5',
                   #'2HDM-Geneva':'formatted_converted_delphes_H_HpHm_generation_mh2_2000_mhc_200_nevents_1M_float32.h5'  ,
                   '2HDM-Geneva':'formatted_converted_delphes_H_HpHm_generation_mh2_5000_mhc_500_nevents_1M_float32.h5'  ,
                   'VZ-Geneva'  :'formatted_converted_delphes_z_zprime_tt_allhad_MVz_5000_MT_500_nevents_1M_float32.h5'  ,
-                  'H-OoD'      :'formatted_converted_Outliers_delphes_H_HpHm_generationredo_float32.h5'                 ,
-                  'qcd-Delphes':'Delphes_dijet.h5'   ,
+                  'QCD-Delphes':'Delphes_dijet.h5'   ,
                   'top-Delphes':'Delphes_ttbar.h5'   ,
-                  'qcd-topo'   :'Atlas_topo-dijet.h5',
+                  'QCD-topo'   :'Atlas_topo-dijet.h5',
                   'top-topo'   :'Atlas_topo-ttbar.h5',
-                  'qcd-UFO'    :'Atlas_UFO-dijet.h5' ,
+                  'QCD-UFO'    :'Atlas_UFO-dijet.h5' ,
                   'top-UFO'    :'Atlas_UFO-ttbar.h5' ,
                   'BSM'        :'Atlas_BSM.h5'       ,
-                  'W-OoD'      :'resamples_oe_w.h5'  ,
+                  'OoD-W'      :'resamples_oe_w.h5'  ,
+                  'OoD-H'      :'formatted_converted_Outliers_delphes_H_HpHm_generationredo_float32.h5',
+                  #'OoD-H'      :'phase_1_H_HpHm_tb_generation_merged_reformatted.h5'                   ,
+                  #'OoD-H'      :'phase_1_H_tb_jj_merged.h5'
                   }
     return data_path + '/' + data_files[data_type]
 
 
 class Batch_Generator(tf.keras.utils.Sequence):
-    def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg=[0,1], n_OoD=[0,1], weight_type='X-S',
+    def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg, OoD_sample=None, weight_type='X-S',
                  cuts='', multithread=True, bin_sizes=None , scaler=None, output_dir=None, memGB=30):
         self.bkg_data    = bkg_data    ; self.OoD_data   = OoD_data
         self.n_const     = n_const     ; self.n_dims     = n_dims
-        self.n_bkg       = n_bkg       ; self.n_OoD      = n_OoD
+        self.n_bkg       = n_bkg       ; self.OoD_sample = OoD_sample
         self.weight_type = weight_type ; self.cuts       = cuts
         self.multithread = multithread ; self.bin_sizes  = bin_sizes
         self.scaler      = scaler      ; self.output_dir = output_dir
         self.load_size   = min( np.diff(n_bkg)[0], int(1e9*memGB/n_const/n_dims/4) )
-        self.OoD_sample  = load_data(self.OoD_data, self.n_OoD, self.cuts, self.n_const, self.n_dims)
     def __len__(self):
         """ Number of batches per epoch """
         return int(np.ceil(np.diff(self.n_bkg)[0]/self.load_size))
     def __getitem__(self, gen_idx):
-        if self.output_dir is not None: print('\nLoading training sample'.upper())
-        else                          : print('\nLoading validation sample'.upper())
+        if self.output_dir is not None: print('\nLoading QCD training sample'.upper())
+        else                          : print('\nLoading QCD validation sample'.upper())
         bkg_idx = gen_idx*self.load_size  , (gen_idx+1)*self.load_size
-        bkg_idx = bkg_idx[0]+self.n_bkg[0], min( bkg_idx[1]+self.n_bkg[0], self.n_bkg[1] )
+        bkg_idx = bkg_idx[0]+self.n_bkg[0], min(bkg_idx[1]+self.n_bkg[0], self.n_bkg[1])
         bkg_sample = load_data(self.bkg_data, bkg_idx, self.cuts, self.n_const, self.n_dims)
-        OoD_sample = self.OoD_sample
-        if self.scaler is not None:
-            scale_sample = apply_scaler #single-thread: apply_scaling ; multi-thread: apply_scaler
-            bkg_sample['constituents'] = scale_sample(bkg_sample['constituents'], self.n_dims, self.scaler, 'QCD')
-            OoD_sample['constituents'] = scale_sample(OoD_sample['constituents'], self.n_dims, self.scaler, 'OoD')
-        #OoD_sample = OoD_sampling(bkg_sample, OoD_sample)
-        OoD_sample = OoD_pairing (bkg_sample, OoD_sample, False if self.n_bkg==[0,1] else self.multithread)
-        print()
+        bkg_sample['constituents'] = apply_scaler(bkg_sample['constituents'], self.n_dims, self.scaler, 'QCD')
+        OoD_sample = bkg_sample if self.OoD_sample is None else self.OoD_sample
+        if OoD_sample is not None:
+            #OoD_sample = OoD_sampling(bkg_sample, OoD_sample) ; print()
+            OoD_sample = OoD_pairing(bkg_sample, OoD_sample, self.multithread); print()
         if self.bin_sizes is not None:
             bkg_sample, OoD_sample = reweight_sample(bkg_sample, OoD_sample, self.bin_sizes, self.weight_type)
-            #print(     len(bkg_sample['weights']),    len(OoD_sample['weights']) )
-            #print(  np.sum(bkg_sample['weights']), np.sum(OoD_sample['weights']) )
-            #print(  np.min(bkg_sample['weights']), np.max(bkg_sample['weights']) ,
-            #       np.mean(bkg_sample['weights']), np.std(bkg_sample['weights']) )
-            #print(  np.min(OoD_sample['weights']), np.max(OoD_sample['weights']) ,
-            #       np.mean(OoD_sample['weights']), np.std(OoD_sample['weights']) )
         if self.output_dir is not None and gen_idx == 0:
             from plots import sample_distributions
             sample = {key:np.concatenate([bkg_sample[key], OoD_sample[key]]) for key in ['m','pt','weights','JZW']}
@@ -73,59 +65,14 @@ class Batch_Generator(tf.keras.utils.Sequence):
         return bkg_sample, OoD_sample
 
 
-def OoD_sampling(bkg_sample, OoD_sample, adjust_weights=False, seed=None):
-    np.random.seed(seed)
-    source_size = len(list(OoD_sample.values())[0])
-    targe_size  = len(list(bkg_sample.values())[0])
-    indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
-    if adjust_weights: OoD_sample['weights'] = OoD_sample['weights']*np.float32(source_size/target_size)
-    return {key:np.take(OoD_ssample[key], indices, axis=0) for key in OoD_ssample}
-
-
-def OoD_pairing(bkg_sample, OoD_sample, multithread=True, verbose=True, seed=0):
-    np.random.seed(seed)
-    m_idx = np.argsort(OoD_sample['m'])
-    OoD_sample = {key:np.take(OoD_sample[key], m_idx, axis=0) for key in OoD_sample}
-    m_OoD, pt_OoD = OoD_sample['m'], OoD_sample['pt']
-    m_bkg, pt_bkg = bkg_sample['m'], bkg_sample['pt']
-    def get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width, pairing='2d'):
-        idx  = np.searchsorted(m_OoD, m_val-m_width/2), np.searchsorted(m_OoD, m_val+m_width/2)
-        cuts = [pt_OoD[idx[0]:idx[1]] >= pt_val-pt_width/2, pt_OoD[idx[0]:idx[1]] <= pt_val+pt_width/2]
-        return idx[0], np.full(np.diff(idx),True) if pairing=='m' else np.logical_and.reduce(cuts)
-    def get_indice(m_OoD, pt_OoD, m_val, pt_val, m_width=10, pt_width=10, factor=2):
-        while True:
-            idx, cuts = get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width)
-            if np.sum(cuts) == 0: pt_width *= factor
-            else                : return np.random.choice(np.where(cuts)[0]) + idx
-            idx, cuts = get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width)
-            if np.sum(cuts) == 0:  m_width *= factor
-            else                : return np.random.choice(np.where(cuts)[0]) + idx
-    def get_indices(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict=None):
-        indices = [get_indice(m_OoD, pt_OoD, m_bkg[n], pt_bkg[n]) for n in range(idx[0], idx[1])]
-        if return_dict is None: return indices
-        else:       return_dict[idx] = indices
-    if verbose: print('Pairing   OoD with QCD', end=' ', flush=True); start_time = time.time()
-    if multithread:
-        manager = mp.Manager(); return_dict = manager.dict()
-        idx_tuples = get_idx(len(m_bkg), min(mp.cpu_count(),16))
-        arguments = [(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict) for idx in idx_tuples]
-        processes = [mp.Process(target=get_indices, args=arg) for arg in arguments]
-        for task in processes: task.start()
-        for task in processes: task.join()
-        indices = np.concatenate([return_dict[key] for key in idx_tuples])
-    else:
-        indices = get_indices(m_bkg, pt_bkg, m_OoD, pt_OoD, (0,len(m_bkg)))
-    if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    return {key:np.take(OoD_sample[key], indices, axis=0) for key in OoD_sample}
-
-
 def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
-              adjust_weights=False, verbose=False, pt_scaling=False):
+              adjust_weights=False, verbose=True, pt_scaling=False):
     start_time = time.time()
-    if verbose: print('Loading', format(data_type,'<10s'), 'sample', end=' ', flush=True)
     if np.isscalar(idx): idx = (0, idx)
     data_file = get_file(data_type)
     data      = h5py.File(data_file,"r")
+    #if verbose: print('Loading', format(data_type,'>5s'), 'sample', end='', flush=True)
+    if verbose: print('Loading', data_file.split('/')[-1], end='', flush=True)
     if var_list == None:
         var_list = ['m_calo','pt_calo','rljet_m_comb','rljet_pt_comb','weights','constituents','JZW','DSID']
         #var_list = ['weights','constituents','JZW','DSID']
@@ -148,10 +95,10 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
     sample['m' ] = sample.pop('rljet_m_comb'  if 'rljet_m_comb'  in sample else  'm_calo')
     sample_size = len(list(sample.values())[0])
     if 'JZW'     not in sample:
-        sample['JZW'    ] = np.full(sample_size, 0 if 'qcd' in data_type else -1, dtype=np.float32)
+        sample['JZW'    ] = np.full(sample_size, 0 if 'QCD' in data_type.upper() else -1, dtype=np.float32)
     if 'weights' not in sample:
-        sample['weights'] = np.full(sample_size, 1                              , dtype=np.float32)
-    """ Applying sample cuts"""
+        sample['weights'] = np.full(sample_size, 1                                      , dtype=np.float32)
+    """ Applying sample cuts """
     sample = sample_cuts(sample, cuts, DSIDs)
     """ Adjusting weights for cross-section """
     if adjust_weights:
@@ -164,7 +111,7 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
         shape = sample['constituents'].shape
         sample['constituents'] = np.reshape(sample['constituents']        , (-1,shape[1]//4,4))
         sample['constituents'] = np.reshape(sample['constituents'][...,1:], (shape[0],-1)     )
-    if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+    if verbose: print(' (', '\b'+format(time.time()-start_time, '2.1f'), '\b'+' s)')
     return sample
 
 
@@ -215,6 +162,52 @@ def sample_cuts(sample, cuts, DSIDs=None):
     if not np.all(cuts):
         sample = {key:sample[key][cuts] for key in sample}
     return sample
+
+
+def OoD_sampling(bkg_sample, OoD_sample, adjust_weights=False, seed=None):
+    np.random.seed(seed)
+    source_size = len(list(OoD_sample.values())[0])
+    targe_size  = len(list(bkg_sample.values())[0])
+    indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
+    if adjust_weights: OoD_sample['weights'] = OoD_sample['weights']*np.float32(source_size/target_size)
+    return {key:np.take(OoD_ssample[key], indices, axis=0) for key in OoD_ssample}
+
+
+def OoD_pairing(bkg_sample, OoD_sample, multithread=True, verbose=True, seed=0):
+    np.random.seed(seed)
+    m_idx = np.argsort(OoD_sample['m'])
+    OoD_sample = {key:np.take(OoD_sample[key], m_idx, axis=0) for key in OoD_sample}
+    m_OoD, pt_OoD = OoD_sample['m'], OoD_sample['pt']
+    m_bkg, pt_bkg = bkg_sample['m'], bkg_sample['pt']
+    def get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width, pairing='2d'):
+        idx  = np.searchsorted(m_OoD, m_val-m_width/2), np.searchsorted(m_OoD, m_val+m_width/2)
+        cuts = [pt_OoD[idx[0]:idx[1]] >= pt_val-pt_width/2, pt_OoD[idx[0]:idx[1]] <= pt_val+pt_width/2]
+        return idx[0], np.full(np.diff(idx),True) if pairing=='m' else np.logical_and.reduce(cuts)
+    def get_indice(m_OoD, pt_OoD, m_val, pt_val, m_width=10, pt_width=10, factor=2):
+        while True:
+            idx, cuts = get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width)
+            if np.sum(cuts) == 0: pt_width *= factor
+            else                : return np.random.choice(np.where(cuts)[0]) + idx
+            idx, cuts = get_cuts(m_OoD, pt_OoD, m_val, pt_val, m_width, pt_width)
+            if np.sum(cuts) == 0:  m_width *= factor
+            else                : return np.random.choice(np.where(cuts)[0]) + idx
+    def get_indices(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict=None):
+        indices = [get_indice(m_OoD, pt_OoD, m_bkg[n], pt_bkg[n]) for n in range(idx[0], idx[1])]
+        if return_dict is None: return indices
+        else:       return_dict[idx] = indices
+    if verbose: print('Pairing OoD with QCD', end=' ', flush=True); start_time = time.time()
+    if multithread:
+        manager = mp.Manager(); return_dict = manager.dict()
+        idx_tuples = get_idx(len(m_bkg), min(mp.cpu_count(),16))
+        arguments = [(m_bkg, pt_bkg, m_OoD, pt_OoD, idx, return_dict) for idx in idx_tuples]
+        processes = [mp.Process(target=get_indices, args=arg) for arg in arguments]
+        for task in processes: task.start()
+        for task in processes: task.join()
+        indices = np.concatenate([return_dict[key] for key in idx_tuples])
+    else:
+        indices = get_indices(m_bkg, pt_bkg, m_OoD, pt_OoD, (0,len(m_bkg)))
+    if verbose: print('(', '\b'+format(time.time()-start_time, '2.1f'), '\b'+' s)')
+    return {key:np.take(OoD_sample[key], indices, axis=0) for key in OoD_sample}
 
 
 def reweight_sample(bkg_sample, sig_sample, bin_sizes, weight_type='X-S'):
@@ -337,7 +330,7 @@ def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=Tr
     if metric in ['JSD', 'KLD', 'X-S', 'MARE']:
         P = np.maximum(np.float64(P), delta)
         Q = np.maximum(np.float64(Q), delta)
-    if metric in ['Inputs']:
+    if metric in ['Inputs', 'Inputs_scaled']:
         loss = np.mean(P, axis=1)
     if metric in ['JSD', 'KSD', 'EMD']:
         idx_tuples = get_idx(len(P), mp.cpu_count()//3)
@@ -368,7 +361,7 @@ def latent_loss(X_true, model):
 
 
 def fit_scaler(sample, n_dims, scaler_out, scaler_type='RobustScaler', reshape=False):
-    print('\nFitting', scaler_type, 'scaler', end=' ', flush=True)
+    print('Fitting', scaler_type, 'to QCD sample', end='', flush=True)
     start_time = time.time()
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     if scaler_type == 'QuantileTransformer':
@@ -380,23 +373,25 @@ def fit_scaler(sample, n_dims, scaler_out, scaler_type='RobustScaler', reshape=F
     if scaler_type == 'MaxAbsScaler':
         scaler = preprocessing.MaxAbsScaler()
     scaler.fit(sample)
-    print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
-    print('Saving scaler to', scaler_out)
+    print(' (', '\b'+format(time.time()-start_time, '2.1f'), '\b'+' s)')
+    print('Saving to ' + scaler_out)
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
 def apply_scaling(sample, n_dims, scaler, tag, reshape=False, verbose=True, idx=(0,None), return_dict=None):
-    if idx == (0,None) and verbose: print('Applying scaler to '+tag, end=' ', flush=True)
+    if idx == (0,None) and verbose: print('Applying scaler/transformer to '+tag, end='', flush=True)
     start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,n_dims))
     sample = scaler.transform(sample)
     sample = np.reshape(sample, shape)
     if idx == (0,None):
-        if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+        if verbose: print(' (', '\b'+format(time.time()-start_time, '2.1f'), '\b'+' s)')
         return sample
     else: return_dict[idx] = sample
 def apply_scaler(sample, n_dims, scaler, tag='sample', reshape=False, verbose=True):
-    if verbose: print('Applying scaler to '+tag, end=' ', flush=True); start_time = time.time()
+    if scaler is None: return sample
+    if verbose: print('Applying scaler/transformer to '+tag, end='', flush=True)
+    start_time = time.time()
     idx_tuples = get_idx(len(sample), int(mp.cpu_count()/2))
     manager = mp.Manager(); return_dict = manager.dict()
     arguments = [(sample[idx[0]:idx[1]], n_dims, scaler, tag, reshape, False, idx, return_dict)
@@ -405,7 +400,7 @@ def apply_scaler(sample, n_dims, scaler, tag='sample', reshape=False, verbose=Tr
     for task in processes: task.start()
     for task in processes: task.join()
     sample = np.concatenate([return_dict[idx] for idx in idx_tuples])
-    if verbose: print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
+    if verbose: print(' (', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
 def inverse_scaler(sample, n_dims, scaler, reshape=False):
     print('Applying inverse scaler', end=' ', flush=True); start_time = time.time()
@@ -417,7 +412,7 @@ def inverse_scaler(sample, n_dims, scaler, reshape=False):
     return sample
 
 
-def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,800], bins=100,
+def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,1000], bins=200,
                 make_histo=True, print_info=True, logspace=False):
     #import pyBumpHunter as BH; sys.path.append('../')
     #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D

@@ -88,8 +88,13 @@ def get_OE_loss(vae, batch_X, batch_X_OE, OE_type, margin):
     """ Calculating outlier MSE loss """
     reconstructed    = vae(batch_X   )
     reconstructed_OE = vae(batch_X_OE)
-    loss_MSE    = tf.keras.losses.MSE(batch_X   , reconstructed   )
-    loss_MSE_OE = tf.keras.losses.MSE(batch_X_OE, reconstructed_OE)
+    #loss_MSE    = tf.keras.losses.MSE(batch_X   , reconstructed   )
+    #loss_MSE_OE = tf.keras.losses.MSE(batch_X_OE, reconstructed_OE)
+    loss_MSE    = tf.keras.losses.MAE(batch_X   , reconstructed   )
+    loss_MSE_OE = tf.keras.losses.MAE(batch_X_OE, reconstructed_OE)
+    #mape = tf.keras.losses.MeanAbsolutePercentageError()
+    #loss_MSE    = mape(batch_X   , reconstructed)/tf.constant(100.)
+    #loss_MSE_OE = mape(batch_X_OE, reconstructed)/tf.constant(100.)
     if OE_type == 'MSE':
         return tf.keras.activations.sigmoid(loss_MSE - loss_MSE_OE         )
     if OE_type == 'MSE-margin':
@@ -102,7 +107,10 @@ def get_losses(vae, data, OE_type, beta, lamb, margin):
     OoD_batch_X, OoD_weights = OoD_sample['constituents'], OoD_sample['weights']
     """ MSE reconstruction loss """
     reconstructed = vae(bkg_batch_X)
-    loss_MSE = tf.keras.losses.MSE(bkg_batch_X, reconstructed)
+    #loss_MSE = tf.keras.losses.MSE(bkg_batch_X, reconstructed)
+    loss_MSE = tf.keras.losses.MAE(bkg_batch_X, reconstructed)
+    #mape = tf.keras.losses.MeanAbsolutePercentageError()
+    #loss_MSE = mape(bkg_batch_X, reconstructed)/tf.constant(100.)
     loss_MSE = tf.math.multiply(loss_MSE, bkg_weights)
     """ KLD regularization loss """
     loss_KLD = sum(vae.losses)
