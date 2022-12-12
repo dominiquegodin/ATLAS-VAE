@@ -65,21 +65,30 @@ class Batch_Generator(tf.keras.utils.Sequence):
         return bkg_sample, OoD_sample
 
 
+def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, cuts='', n_const=20, n_dims=4,
+                var_list=None, DSIDs=None, adjust_weights=False, shuffling=False, verbose=True):
+    sig_sample = load_data(sig_data, sig_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
+    bkg_sample = load_data(bkg_data, bkg_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
+    if 'OoD' in sig_data: sig_sample = OoD_sampling(sig_sample, len(list(bkg_sample.values())[0]))
+    sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]]) for key in set(bkg_sample)&set(sig_sample)}
+    if shuffling: sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
+    return sample
+
+
 def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
-              adjust_weights=False, verbose=True, pt_scaling=False):
+              adjust_weights=False, verbose=True, pt_scaling=False, constituents='ON', HLV='OFF'):
     start_time = time.time()
     if np.isscalar(idx): idx = (0, idx)
     data_file = get_file(data_type)
     data      = h5py.File(data_file,"r")
-    #if verbose: print('Loading', format(data_type,'>5s'), 'sample', end='', flush=True)
     if verbose: print('Loading', data_file.split('/')[-1], end='', flush=True)
     if var_list == None:
-        var_list = ['m_calo','pt_calo','rljet_m_comb','rljet_pt_comb','weights','constituents','JZW','DSID']
+        #var_list = ['m_calo','pt_calo','rljet_m_comb','rljet_pt_comb','weights','constituents','JZW','DSID']
         #var_list = ['weights','constituents','JZW','DSID']
-    sample = {key:data[key][idx[0]:idx[1]] for key in set(data) & set(var_list) if key!='constituents'}
-    if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0:
-        var_list += ['constituents']
-    if 'constituents' in var_list:
+        var_list = data.keys()
+    sample = {key:data[key][idx[0]:idx[1]] for key in set(data) & set(var_list) if 'constituents' not in key}
+    if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0: var_list += ['constituents']
+    if constituents == 'ON':
         # Enforcing jets pt sorting
         sample['constituents'] = data['constituents'][idx[0]:idx[1],:data['constituents'].shape[1]]
         sample['constituents'] = jets_sorting(sample['constituents'])[:,:4*n_const]
@@ -89,8 +98,8 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
             shape = sample['constituents'].shape
             zeros_array = np.zeros((shape[0], 4*n_const-shape[1]), dtype=np.float32)
             sample['constituents'] = np.hstack([sample['constituents'], zeros_array])
-    if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0:
-        sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
+        if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0:
+            sample.update({key:val for key,val in jets_4v(sample['constituents']).items()})
     sample['pt'] = sample.pop('rljet_pt_comb' if 'rljet_pt_comb' in sample else 'pt_calo')
     sample['m' ] = sample.pop('rljet_m_comb'  if 'rljet_m_comb'  in sample else  'm_calo')
     sample_size = len(list(sample.values())[0])
@@ -112,16 +121,12 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
         sample['constituents'] = np.reshape(sample['constituents']        , (-1,shape[1]//4,4))
         sample['constituents'] = np.reshape(sample['constituents'][...,1:], (shape[0],-1)     )
     if verbose: print(' (', '\b'+format(time.time()-start_time, '2.1f'), '\b'+' s)')
-    return sample
-
-
-def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, cuts='', n_const=20, n_dims=4,
-                var_list=None, DSIDs=None, adjust_weights=False, shuffling=False, verbose=True):
-    sig_sample = load_data(sig_data, sig_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
-    bkg_sample = load_data(bkg_data, bkg_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
-    if 'OoD' in sig_data: sig_sample = OoD_sampling(sig_sample, len(list(bkg_sample.values())[0]))
-    sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]]) for key in set(bkg_sample)&set(sig_sample)}
-    if shuffling: sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
+    if HLV == 'ON':
+        sample['HLV'] = np.hstack([np.float32(sample[key])[:,np.newaxis] for key in ['pt','m','rljet_phi','rljet_eta',
+                                  'rljet_Tau1_wta','rljet_Tau2_wta','rljet_Tau3_wta','d12','d23','ECF2','rljet_ECF3']])
+        if constituents == 'ON': sample['constituents'] = np.hstack([sample['constituents'], sample.pop('HLV')])
+        else                   : sample['constituents'] = sample.pop('HLV')
+    #for key,val in sample.items(): print(key, val.shape, val.dtype)
     return sample
 
 

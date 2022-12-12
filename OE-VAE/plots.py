@@ -12,7 +12,12 @@ from utils      import n_constituents, jets_pt, get_idx
 
 def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_metric,
                  sig_data, output_dir, apply_cuts, normal_losses, decorrelation):
-    def loss_mapping(x): return (1+x/(1+np.abs(x)))/2 if np.any(x<0) else x/(x+1)
+    def loss_mapping(x):
+        if   np.all(np.logical_and(x >= 0, x <= 1)): return  x
+        elif np.all(np.logical_and(x >=-1, x <= 0)): return  x + 1
+        elif np.all(x >= 0)                        : return  x/(np.abs(x)+1)
+        elif np.all(x <= 0)                        : return  x/(np.abs(x)+1) + 1
+        else                                       : return (x/(np.abs(x)+1) + 1)/2
     print('\nPLOTTING PERFORMANCE RESULTS:')
     manager = mp.Manager(); X_losses = manager.dict()
     arguments = [(X_true, X_pred, n_dims, metric, X_losses) for metric in set(metrics)-set(['Inputs','Latent'])]

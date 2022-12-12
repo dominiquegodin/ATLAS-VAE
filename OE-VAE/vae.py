@@ -41,6 +41,8 @@ parser.add_argument( '--apply_cuts'   , default = 'OFF'                         
 parser.add_argument( '--normal_losses', default = 'ON'                                )
 parser.add_argument( '--decorrelation', default = 'OFF'                               )
 parser.add_argument( '--slurm_id'     , default = 0            , type = int           )
+parser.add_argument( '--constituents' , default = 'ON'                                )
+parser.add_argument( '--HLVs'         , default = 'OFF'                               )
 args = parser.parse_args()
 for key in ['n_train', 'n_valid', 'n_OoD', 'n_sig', 'batch_size']: vars(args)[key] = int(vars(args)[key])
 if args.scaler_out == '': args.scaler_out = args.scaler_type + '.pkl'
@@ -55,8 +57,15 @@ args.hist_file = args.output_dir+'/'+args.hist_file ; args.output_dir = args.out
 Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
 
+HLVs = ['rljet_phi', 'rljet_eta', 'rljet_Tau1_wta', 'rljet_Tau2_wta',
+        'rljet_Tau3_wta', 'd12', 'd23', 'ECF2', 'rljet_ECF3', 'pt', 'm']
+if args.constituents == 'ON'  and args.HLVs == 'ON' : input_dim = args.n_dims*args.n_const + len(HLVs)
+if args.constituents == 'ON'  and args.HLVs == 'OFF': input_dim = args.n_dims*args.n_const
+if args.constituents == 'OFF' and args.HLVs == 'ON' : input_dim =                            len(HLVs)
+
+
 # SAMPLES SELECTIONS
-bkg_data, OoD_data, sig_data = 'QCD-Geneva', 'OoD-H', 'VZ-Geneva'
+bkg_data, OoD_data, sig_data = 'QCD-Geneva', 'OoD-H', '2HDM-Geneva'
 sample_size  = len(list(h5py.File(get_file(bkg_data),'r').values())[0])
 args.n_train = [0                       , min(args.n_train, sample_size-args.n_valid)]
 args.n_valid = [sample_size-args.n_valid, sample_size                                ]
@@ -66,11 +75,13 @@ valid_cuts = gen_cuts + ['(sample["pt"] <= 5000)']
 for n in range(len(train_cuts)): vars(args)['train cuts ('+str(n+1)+')'] = train_cuts[n]
 for n in range(len(valid_cuts)): vars(args)['valid cuts ('+str(n+1)+')'] = valid_cuts[n]
 print('\nPROGRAM ARGUMENTS:\n'+tabulate(vars(args).items(), tablefmt='psql'))
+#for key,val in h5py.File(get_file(sig_data),"r").items(): print( key, val.shape, val.dtype )
 
 
 # LOADIND PRE-TRAINED WEIGHTS AND/OR CONSTITUENTS SCALER
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' #Suppressing Tensorflow infos and warnings
-model = VariationalAutoEncoder(args.FC_layers, args.n_dims*args.n_const, seed=None if args.n_iter>1 else 0)
+#model = VariationalAutoEncoder(args.FC_layers, args.n_dims*args.n_const, seed=None if args.n_iter>1 else 0)
+model = VariationalAutoEncoder(args.FC_layers, input_dim, seed=None if args.n_iter>1 else 0)
 multithread = True ; scaler = None
 if args.model_in != args.output_dir[0:args.output_dir.rfind('/')]+'/':
     if not os.path.isfile(args.model_in): sys.exit()
