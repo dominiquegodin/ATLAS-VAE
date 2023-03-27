@@ -69,6 +69,15 @@ class Sampling(layers.Layer):
         return tf.random.normal(tf.shape(z_mean), mean=z_mean, stddev=sigma, seed=seed)
 
 
+def get_reconstruction_loss(batch_input, batch_output, OE_type):
+    if OE_type == 'MSE' or OE_type == 'MSE-margin':
+        return tf.keras.losses.MSE(batch_input, batch_output)
+    if OE_type == 'MAE' or OE_type == 'MAE-margin' or OE_type == 'KLD':
+        #mape = tf.keras.losses.MeanAbsolutePercentageError()
+        #return mape(batch_input, batch_output)/tf.constant(100.)
+        return tf.keras.losses.MAE(batch_input, batch_output)
+
+
 def get_KLD_loss(z_mean, z_log_var):
     """ Calculating latent layer KLD loss """
     z_exp_log_var = tf.exp(z_log_var)
@@ -88,29 +97,32 @@ def get_OE_loss(vae, batch_X, batch_X_OE, OE_type, margin):
     """ Calculating outlier MSE loss """
     reconstructed    = vae(batch_X   )
     reconstructed_OE = vae(batch_X_OE)
-    #loss_MSE    = tf.keras.losses.MSE(batch_X   , reconstructed   )
-    #loss_MSE_OE = tf.keras.losses.MSE(batch_X_OE, reconstructed_OE)
-    loss_MSE    = tf.keras.losses.MAE(batch_X   , reconstructed   )
-    loss_MSE_OE = tf.keras.losses.MAE(batch_X_OE, reconstructed_OE)
-    #mape = tf.keras.losses.MeanAbsolutePercentageError()
-    #loss_MSE    = mape(batch_X   , reconstructed)/tf.constant(100.)
-    #loss_MSE_OE = mape(batch_X_OE, reconstructed)/tf.constant(100.)
-    if OE_type == 'MSE':
+    loss_MSE    = get_reconstruction_loss(batch_X   , reconstructed   , OE_type)
+    loss_MSE_OE = get_reconstruction_loss(batch_X_OE, reconstructed_OE, OE_type)
+
+    if OE_type == 'MSE' or OE_type == 'MAE':
         return tf.keras.activations.sigmoid(loss_MSE - loss_MSE_OE         )
-    if OE_type == 'MSE-margin':
+    if OE_type == 'MSE-margin' or OE_type == 'MAE-margin':
         return tf.keras.activations.relu   (loss_MSE - loss_MSE_OE + margin)
 
 
 def get_losses(vae, data, OE_type, beta, lamb, margin):
     bkg_sample , OoD_sample  = data
-    bkg_batch_X, bkg_weights = bkg_sample['constituents'], bkg_sample['weights']
-    OoD_batch_X, OoD_weights = OoD_sample['constituents'], OoD_sample['weights']
+    if 'constituents' in bkg_sample and 'HLVs' in bkg_sample:
+        bkg_batch_X = np.hstack([bkg_sample['constituents'], bkg_sample['HLVs']])
+        OoD_batch_X = np.hstack([OoD_sample['constituents'], OoD_sample['HLVs']])
+    elif 'constituents' in bkg_sample:
+        bkg_batch_X = bkg_sample['constituents']
+        OoD_batch_X = OoD_sample['constituents']
+    elif 'HLVs' in bkg_sample:
+        bkg_batch_X = bkg_sample['HLVs']
+        OoD_batch_X = OoD_sample['HLVs']
+    bkg_weights = bkg_sample['weights']
+    OoD_weights = OoD_sample['weights']
     """ MSE reconstruction loss """
     reconstructed = vae(bkg_batch_X)
-    #loss_MSE = tf.keras.losses.MSE(bkg_batch_X, reconstructed)
-    loss_MSE = tf.keras.losses.MAE(bkg_batch_X, reconstructed)
-    #mape = tf.keras.losses.MeanAbsolutePercentageError()
-    #loss_MSE = mape(bkg_batch_X, reconstructed)/tf.constant(100.)
+    loss_MSE = get_reconstruction_loss(bkg_batch_X, reconstructed, OE_type)
+
     loss_MSE = tf.math.multiply(loss_MSE, bkg_weights)
     """ KLD regularization loss """
     loss_KLD = sum(vae.losses)

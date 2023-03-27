@@ -28,12 +28,14 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_me
     for job in processes: job.start()
     for job in processes: job.join()
     """ Adding latent space KLD metric and loss """
-    if 'Latent' in metrics: X_losses['Latent'] = latent_loss(X_true, model)
+    if 'Latent' in metrics:
+        X_losses['Latent'] = latent_loss(X_true, model)
     metrics = list(X_losses.keys())
     if normal_losses == 'ON' or decorrelation == 'ON':
         X_losses = {key:loss_mapping(val) for key,val in X_losses.items()}
     if decorrelation == 'ON':
-        X_losses[loss_metric] = mass_decorrelation(y_true, sample['m'], X_losses[loss_metric])
+        X_losses[loss_metric] = mass_decorrelation(y_true, sample['m' ], X_losses[loss_metric])
+        X_losses[loss_metric] = mass_decorrelation(y_true, sample['pt'], X_losses[loss_metric])
     best_loss  = bump_scan(y_true, X_losses[loss_metric], loss_metric, sample, sig_data, output_dir)
     processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, loss_metric, output_dir)]
@@ -43,7 +45,8 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_me
     #processes += [mp.Process(target=tSNE, args=(y_true,  X_true, model, output_dir))]
     for job in processes: job.start()
     for job in processes: job.join()
-    if apply_cuts == 'ON': generate_cuts(y_true, sample, X_losses[loss_metric], loss_metric, sig_data, output_dir)
+    if apply_cuts == 'ON':
+        generate_cuts(y_true, sample, X_losses[loss_metric], loss_metric, sig_data, output_dir)
     print()
 
 
@@ -63,7 +66,7 @@ def cum_distribution(x):
 def mass_decorrelation(y_true, X_mass, X_loss, mass_bins=None):
     mass, loss = X_mass[y_true==1], X_loss[y_true==1]
     if mass_bins is None: mass_bins = get_bins(mass)
-    mass_idx = np.clip(np.digitize(mass, mass_bins), 1, len(mass_bins)-1) - 1
+    mass_idx = np.clip(np.digitize(  mass, mass_bins), 1, len(mass_bins)-1) - 1
     cdf_list = [cum_distribution(loss[mass_idx==idx]) for idx in range(len(mass_bins)-1)]
     mass_idx = np.clip(np.digitize(X_mass, mass_bins), 1, len(mass_bins)-1) - 1
     for idx in range(len(mass_bins)-1): X_loss[mass_idx==idx] = cdf_list[idx](X_loss[mass_idx==idx])
@@ -508,7 +511,7 @@ def plot_distributions(samples, sig_data, plot_var, bin_sizes, output_dir, file_
         elif plot_var == 'pt': pylab.xlim(0, 2000); pylab.ylim(1e0, 1e6)
     if normalize:
         if   plot_var == 'm' : pylab.ylim(1e-6, 1e0)
-        elif plot_var == 'pt': pylab.ylim(1e-6, 1e0)
+        elif plot_var == 'pt': pylab.ylim(1e-7, 1e0)
         elif plot_var == 'm_over_pt': pylab.ylim(1e-4, 1e3)
     axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
     if not log: axes.yaxis.set_minor_locator(ticker.AutoMinorLocator(10))

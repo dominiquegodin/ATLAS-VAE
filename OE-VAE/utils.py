@@ -33,15 +33,17 @@ def get_file(data_type, host_name='atlas'):
 
 
 class Batch_Generator(tf.keras.utils.Sequence):
-    def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg, OoD_sample=None, weight_type='X-S',
-                 cuts='', multithread=True, bin_sizes=None , scaler=None, output_dir=None, memGB=30):
-        self.bkg_data    = bkg_data    ; self.OoD_data   = OoD_data
-        self.n_const     = n_const     ; self.n_dims     = n_dims
-        self.n_bkg       = n_bkg       ; self.OoD_sample = OoD_sample
-        self.weight_type = weight_type ; self.cuts       = cuts
-        self.multithread = multithread ; self.bin_sizes  = bin_sizes
-        self.scaler      = scaler      ; self.output_dir = output_dir
-        self.load_size   = min( np.diff(n_bkg)[0], int(1e9*memGB/n_const/n_dims/4) )
+    def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg, OoD_sample=None,
+                 weight_type='X-S', cuts='', multithread=True, constituents='ON', HLVs='ON',
+                 bin_sizes=None , HLV_scaler=None, const_scaler=None, output_dir=None, memGB=30):
+        self.bkg_data    = bkg_data    ; self.OoD_data     = OoD_data
+        self.n_const     = n_const     ; self.n_dims       = n_dims
+        self.n_bkg       = n_bkg       ; self.OoD_sample   = OoD_sample
+        self.weight_type = weight_type ; self.cuts         = cuts
+        self.multithread = multithread ; self.bin_sizes    = bin_sizes
+        self.HLV_scaler  = HLV_scaler  ; self.const_scaler = const_scaler
+        self.HLVs        = HLVs        ; self.constituents = constituents
+        self.output_dir  = output_dir  ; self.load_size    = min(np.diff(n_bkg)[0], int(1e9*memGB/n_const/n_dims/4))
     def __len__(self):
         """ Number of batches per epoch """
         return int(np.ceil(np.diff(self.n_bkg)[0]/self.load_size))
@@ -50,8 +52,8 @@ class Batch_Generator(tf.keras.utils.Sequence):
         else                          : print('\nLoading QCD validation sample'.upper())
         bkg_idx = gen_idx*self.load_size  , (gen_idx+1)*self.load_size
         bkg_idx = bkg_idx[0]+self.n_bkg[0], min(bkg_idx[1]+self.n_bkg[0], self.n_bkg[1])
-        bkg_sample = load_data(self.bkg_data, bkg_idx, self.cuts, self.n_const, self.n_dims)
-        bkg_sample['constituents'] = apply_scaler(bkg_sample['constituents'], self.n_dims, self.scaler, 'QCD')
+        bkg_sample = load_data(self.bkg_data, bkg_idx, self.cuts, self.n_const, self.n_dims,
+                               self.constituents, self.HLVs)
         OoD_sample = bkg_sample if self.OoD_sample is None else self.OoD_sample
         if OoD_sample is not None:
             #OoD_sample = OoD_sampling(bkg_sample, OoD_sample) ; print()
@@ -62,21 +64,15 @@ class Batch_Generator(tf.keras.utils.Sequence):
             from plots import sample_distributions
             sample = {key:np.concatenate([bkg_sample[key], OoD_sample[key]]) for key in ['m','pt','weights','JZW']}
             sample_distributions(sample, self.OoD_data, self.output_dir, 'train', self.weight_type, self.bin_sizes)
+        if 'constituents' in bkg_sample:
+            bkg_sample['constituents'] = apply_scaler(bkg_sample['constituents'], self.n_dims, self.const_scaler, 'QCD')
+        if 'HLVs' in bkg_sample:
+            bkg_sample['HLVs'        ] = apply_scaler(bkg_sample['HLVs'        ], self.n_dims, self.HLV_scaler  , 'QCD')
         return bkg_sample, OoD_sample
 
 
-def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, cuts='', n_const=20, n_dims=4,
-                var_list=None, DSIDs=None, adjust_weights=False, shuffling=False, verbose=True):
-    sig_sample = load_data(sig_data, sig_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
-    bkg_sample = load_data(bkg_data, bkg_idx, cuts, n_const, n_dims, var_list, DSIDs, adjust_weights, verbose)
-    if 'OoD' in sig_data: sig_sample = OoD_sampling(sig_sample, len(list(bkg_sample.values())[0]))
-    sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]]) for key in set(bkg_sample)&set(sig_sample)}
-    if shuffling: sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
-    return sample
-
-
-def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
-              adjust_weights=False, verbose=True, pt_scaling=False, constituents='ON', HLV='OFF'):
+def load_data(data_type, idx, cuts, n_const, n_dims, constituents, HLVs, var_list=None, DSIDs=None,
+              adjust_weights=False, verbose=True, pt_scaling=False):
     start_time = time.time()
     if np.isscalar(idx): idx = (0, idx)
     data_file = get_file(data_type)
@@ -90,8 +86,7 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
     if len(set(sample) & {'m_calo','pt_calo','rljet_m_comb','rljet_pt_comb'}) == 0: var_list += ['constituents']
     if constituents == 'ON':
         # Enforcing jets pt sorting
-        sample['constituents'] = data['constituents'][idx[0]:idx[1],:data['constituents'].shape[1]]
-        sample['constituents'] = jets_sorting(sample['constituents'])[:,:4*n_const]
+        sample['constituents'] = jets_sorting(data['constituents'][idx[0]:idx[1],:])[:,:4*n_const]
         # Assuming jets pt sorting
         #sample['constituents'] = np.float32(data['constituents'][idx[0]:idx[1],:4*n_const])
         if 4*n_const > data['constituents'].shape[1]:
@@ -121,12 +116,22 @@ def load_data(data_type, idx, cuts, n_const, n_dims, var_list=None, DSIDs=None,
         sample['constituents'] = np.reshape(sample['constituents']        , (-1,shape[1]//4,4))
         sample['constituents'] = np.reshape(sample['constituents'][...,1:], (shape[0],-1)     )
     if verbose: print(' (', '\b'+format(time.time()-start_time, '2.1f'), '\b'+' s)')
-    if HLV == 'ON':
-        sample['HLV'] = np.hstack([np.float32(sample[key])[:,np.newaxis] for key in ['pt','m','rljet_phi','rljet_eta',
-                                  'rljet_Tau1_wta','rljet_Tau2_wta','rljet_Tau3_wta','d12','d23','ECF2','rljet_ECF3']])
-        if constituents == 'ON': sample['constituents'] = np.hstack([sample['constituents'], sample.pop('HLV')])
-        else                   : sample['constituents'] = sample.pop('HLV')
+    if HLVs == 'ON':
+        sample['HLVs'] = np.hstack([np.float32(sample[key])[:,np.newaxis] for key in ['pt','m','rljet_phi','rljet_eta',
+                                   'rljet_Tau1_wta','rljet_Tau2_wta','rljet_Tau3_wta','d12','d23','ECF2','rljet_ECF3']])
     #for key,val in sample.items(): print(key, val.shape, val.dtype)
+    return sample
+
+
+def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, cuts='', n_const=20, n_dims=4, constituents='ON', HLVs='ON',
+                var_list=None, DSIDs=None, adjust_weights=False, shuffling=False, verbose=True):
+    sig_sample = load_data(sig_data, sig_idx, cuts, n_const, n_dims, constituents, HLVs,
+                           var_list, DSIDs, adjust_weights, verbose)
+    bkg_sample = load_data(bkg_data, bkg_idx, cuts, n_const, n_dims, constituents, HLVs,
+                           var_list, DSIDs, adjust_weights, verbose)
+    if 'OoD' in sig_data: sig_sample = OoD_sampling(sig_sample, len(list(bkg_sample.values())[0]))
+    sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]]) for key in set(bkg_sample)&set(sig_sample)}
+    if shuffling: sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}
     return sample
 
 
@@ -299,9 +304,9 @@ def get_4v(sample, idx=(0,None), return_dict=None):
 def JSD(P, Q, idx, n_dims, return_dict, reshape=False):
     if reshape:
         P, Q = np.reshape(P, (-1,int(P.shape[1]/n_dims),n_dims)), np.reshape(Q, (-1,int(Q.shape[1]/n_dims),n_dims))
-        return_dict[idx] = [np.mean([distance.jensenshannon(P[n,:,m], Q[n,:,m]) for m in np.arange(n_dims)])
+        return_dict[idx] = [np.mean([distance.jensenshannon(P[n,:,m], Q[n,:,m], base=2) for m in np.arange(n_dims)])
                             for n in np.arange(idx[0],idx[1])]
-    else: return_dict[idx] = [distance.jensenshannon(P[n,:], Q[n,:]) for n in np.arange(idx[0],idx[1])]
+    else: return_dict[idx] = [distance.jensenshannon(P[n,:], Q[n,:], base=2) for n in np.arange(idx[0],idx[1])]
 
 
 def KSD(P, Q, idx, n_dims, return_dict, reshape=False):
@@ -331,25 +336,34 @@ def jets_3v(sample, n_dims, idx=[0,None]):
     return np.concatenate([n[...,np.newaxis] for n in [pt, y, phi]], axis=2)
 
 
-def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-16, multiloss=True):
-    if metric in ['JSD', 'KLD', 'X-S', 'MARE']:
-        P = np.maximum(np.float64(P), delta)
-        Q = np.maximum(np.float64(Q), delta)
+def loss_function(P, Q, n_dims, metric, X_losses=None, delta=1e-32, multiloss=True):
+    def KLD(P, Q):
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            return np.nan_to_num(P*np.log2(P/Q))
+    #if metric in ['JSD', 'KLD', 'X-S', 'MARE']:
+    #    P = np.maximum(np.float64(P), delta)
+    #    Q = np.maximum(np.float64(Q), delta)
     if metric in ['Inputs', 'Inputs_scaled']:
         loss = np.mean(P, axis=1)
-    if metric in ['JSD', 'KSD', 'EMD']:
-        idx_tuples = get_idx(len(P), mp.cpu_count()//3)
-        target     = JSD if metric=='JSD' else KSD if metric=='KSD' else EMD
-        manager    = mp.Manager(); return_dict = manager.dict()
-        processes  = [mp.Process(target=target, args=(P, Q, idx, n_dims, return_dict)) for idx in idx_tuples]
-        for task in processes: task.start()
-        for task in processes: task.join()
-        loss = np.concatenate([return_dict[idx] for idx in idx_tuples])
-    if metric == 'MSE' : loss = np.mean(      (P - Q)**2, axis=1)
-    if metric == 'MAE' : loss = np.mean(np.abs(P - Q)   , axis=1)
-    if metric == 'MARE': loss = np.mean(np.abs(P - Q)/P , axis=1)
-    if metric == 'KLD' : loss = np.mean(P*np.log(P/Q)   , axis=1)
-    if metric == 'X-S' : loss = np.mean(P*np.log(1/Q)   , axis=1)
+    #if metric in ['JSD', 'KSD', 'EMD']:
+    #    idx_tuples = get_idx(len(P), mp.cpu_count()//3)
+    #    target     = JSD if metric=='JSD' else KSD if metric=='KSD' else EMD
+    #    manager    = mp.Manager(); return_dict = manager.dict()
+    #    processes  = [mp.Process(target=target, args=(P, Q, idx, n_dims, return_dict)) for idx in idx_tuples]
+    #    for task in processes: task.start()
+    #    for task in processes: task.join()
+    #    loss = np.concatenate([return_dict[idx] for idx in idx_tuples])
+    if metric == 'MSE' : loss = np.mean(      (P - Q)**2 , axis=1)
+    if metric == 'MAE' : loss = np.mean(np.abs(P - Q)    , axis=1)
+    if metric == 'MARE': loss = np.mean(np.abs(P - Q)/P  , axis=1)
+    if metric == 'KLD' :
+        loss = np.sum(KLD(P,Q), axis=1)
+    if metric == 'JSD' :
+        M = (P+Q)/2
+        loss = np.sum((KLD(P,M)+KLD(Q,M))/2, axis=1)
+    if metric == 'X-S' :
+        loss = np.sum(KLD(P,P*Q), axis=1)
     if multiloss: X_losses[metric] = loss
     else: return loss
 
