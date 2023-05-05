@@ -177,10 +177,10 @@ def sample_cuts(sample, cuts, DSIDs=None):
 def OoD_sampling(bkg_sample, OoD_sample, adjust_weights=False, seed=None):
     np.random.seed(seed)
     source_size = len(list(OoD_sample.values())[0])
-    targe_size  = len(list(bkg_sample.values())[0])
+    target_size  = len(list(bkg_sample.values())[0])
     indices = np.random.choice(source_size, target_size, replace=source_size<target_size)
     if adjust_weights: OoD_sample['weights'] = OoD_sample['weights']*np.float32(source_size/target_size)
-    return {key:np.take(OoD_ssample[key], indices, axis=0) for key in OoD_ssample}
+    return {key:np.take(OoD_sample[key], indices, axis=0) for key in OoD_sample}
 
 
 def OoD_pairing(bkg_sample, OoD_sample, multithread=True, verbose=True, seed=0):

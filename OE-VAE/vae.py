@@ -31,10 +31,10 @@ parser.add_argument( '--OE_type'      , default = 'KLD'                         
 parser.add_argument( '--weight_type'  , default = 'X-S'                               )
 parser.add_argument( '--model_in'     , default = ''                                  )
 parser.add_argument( '--model_out'    , default = 'model.h5'                          )
-parser.add_argument( '--const_scaler_type', default = 'QuantileTransformer'           )
+parser.add_argument( '--const_scaler_type', default = ''                              )
 parser.add_argument( '--const_scaler_in'  , default = ''                              )
 parser.add_argument( '--const_scaler_out' , default = ''                              )
-parser.add_argument( '--HLV_scaler_type'  , default = 'RobustScaler'                  )
+parser.add_argument( '--HLV_scaler_type'  , default = ''                              )
 parser.add_argument( '--HLV_scaler_in'    , default = ''                              )
 parser.add_argument( '--HLV_scaler_out'   , default = ''                              )
 parser.add_argument( '--hist_file'    , default = 'history.pkl'                       )
@@ -100,18 +100,18 @@ if args.model_in != args.output_dir[0:args.output_dir.rfind('/')]+'/':
     sys.stdout = sys.__stdout__          #Resuming screen output
     model.load_weights(args.model_in)
     multithread = False
-if args.const_scaler_type.lower() != 'none' and os.path.isfile(args.const_scaler_in):
+if args.const_scaler_type.lower() != '' and os.path.isfile(args.const_scaler_in):
     print('\nLoading scaler/transformer from: ' + args.const_scaler_in)
     const_scaler = pickle.load(open(args.const_scaler_in, 'rb'))
-if args.HLV_scaler_type.lower()   != 'none' and os.path.isfile(args.HLV_scaler_in):
+if args.HLV_scaler_type.lower() != '' and os.path.isfile(args.HLV_scaler_in):
     print('\nLoading scaler/transformer from: ' + args.HLV_scaler_in)
-    HLV_scaler   = pickle.load(open(args.HLV_scaler_in,   'rb'))
+    HLV_scaler = pickle.load(open(args.HLV_scaler_in,   'rb'))
 
 
 # MODEL TRAINING
 if args.n_epochs > 0:
-    if (args.const_scaler_type.lower()!='none' and const_scaler==None)\
-    or (args.HLV_scaler_type.lower()  !='none' and   HLV_scaler==None):
+    if (args.const_scaler_type.lower() != '' and const_scaler == None)\
+    or (args.HLV_scaler_type.lower()   != '' and   HLV_scaler == None):
         print('\nLoading QCD training sample'.upper())
         n_jets = min(args.n_train[1], int(1e9*30/args.n_const/args.n_dims/4))
         train_sample = load_data(bkg_data, n_jets, train_cuts, args.n_const, args.n_dims, args.constituents, args.HLVs)
@@ -119,8 +119,8 @@ if args.n_epochs > 0:
             const_scaler = fit_scaler(train_sample['constituents'], args.n_dims,
                                       args.const_scaler_out, args.const_scaler_type)
         if args.HLVs == 'ON' and HLV_scaler == None:
-            HLV_scaler   = fit_scaler(train_sample['HLVs']        , args.n_dims,
-                                      args.HLV_scaler_out  , args.HLV_scaler_type)
+            HLV_scaler = fit_scaler(train_sample['HLVs'], args.n_dims,
+                                      args.HLV_scaler_out, args.HLV_scaler_type)
     print('\nLoading outlier sample'.upper())
     OoD_sample = load_data(OoD_data, args.n_OoD, train_cuts, args.n_const, args.n_dims,
                            args.constituents, args.HLVs)

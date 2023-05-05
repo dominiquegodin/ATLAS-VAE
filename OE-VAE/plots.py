@@ -34,8 +34,8 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_me
     if normal_losses == 'ON' or decorrelation == 'ON':
         X_losses = {key:loss_mapping(val) for key,val in X_losses.items()}
     if decorrelation == 'ON':
-        X_losses[loss_metric] = mass_decorrelation(y_true, sample['m' ], X_losses[loss_metric])
         X_losses[loss_metric] = mass_decorrelation(y_true, sample['pt'], X_losses[loss_metric])
+        X_losses[loss_metric] = mass_decorrelation(y_true, sample['m' ], X_losses[loss_metric])
     best_loss  = bump_scan(y_true, X_losses[loss_metric], loss_metric, sample, sig_data, output_dir)
     processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, loss_metric, output_dir)]
