@@ -34,16 +34,17 @@ def get_file(data_type, host_name='atlas'):
 
 class Batch_Generator(tf.keras.utils.Sequence):
     def __init__(self, bkg_data, OoD_data, n_const, n_dims, n_bkg, OoD_sample=None,
-                 weight_type='X-S', cuts='', multithread=True, constituents='ON', HLVs='ON',
+                 weight_type='X-S', cuts='', multithread=True, constituents='ON', HLVs='ON', HLV_list=None,
                  bin_sizes=None , HLV_scaler=None, const_scaler=None, output_dir=None, memGB=30):
-        self.bkg_data    = bkg_data    ; self.OoD_data     = OoD_data
-        self.n_const     = n_const     ; self.n_dims       = n_dims
-        self.n_bkg       = n_bkg       ; self.OoD_sample   = OoD_sample
-        self.weight_type = weight_type ; self.cuts         = cuts
-        self.multithread = multithread ; self.bin_sizes    = bin_sizes
-        self.HLV_scaler  = HLV_scaler  ; self.const_scaler = const_scaler
-        self.HLVs        = HLVs        ; self.constituents = constituents
-        self.output_dir  = output_dir  ; self.load_size    = min(np.diff(n_bkg)[0], int(1e9*memGB/n_const/n_dims/4))
+        self.bkg_data     = bkg_data     ; self.OoD_data     = OoD_data
+        self.n_const      = n_const      ; self.n_dims       = n_dims
+        self.n_bkg        = n_bkg        ; self.OoD_sample   = OoD_sample
+        self.weight_type  = weight_type  ; self.cuts         = cuts
+        self.multithread  = multithread  ; self.bin_sizes    = bin_sizes
+        self.HLV_scaler   = HLV_scaler   ; self.const_scaler = const_scaler
+        self.HLVs         = HLVs         ; self.HLV_list     = HLV_list
+        self.constituents = constituents ; self.output_dir   = output_dir
+        self.load_size = min(np.diff(n_bkg)[0], int(1e9*memGB/n_const/n_dims/4))
     def __len__(self):
         """ Number of batches per epoch """
         return int(np.ceil(np.diff(self.n_bkg)[0]/self.load_size))
@@ -53,7 +54,7 @@ class Batch_Generator(tf.keras.utils.Sequence):
         bkg_idx = gen_idx*self.load_size  , (gen_idx+1)*self.load_size
         bkg_idx = bkg_idx[0]+self.n_bkg[0], min(bkg_idx[1]+self.n_bkg[0], self.n_bkg[1])
         bkg_sample = load_data(self.bkg_data, bkg_idx, self.cuts, self.n_const, self.n_dims,
-                               self.constituents, self.HLVs)
+                               self.constituents, self.HLVs, self.HLV_list)
         OoD_sample = bkg_sample if self.OoD_sample is None else self.OoD_sample
         if OoD_sample is not None:
             #OoD_sample = OoD_sampling(bkg_sample, OoD_sample) ; print()
@@ -71,8 +72,8 @@ class Batch_Generator(tf.keras.utils.Sequence):
         return bkg_sample, OoD_sample
 
 
-def load_data(data_type, idx, cuts, n_const, n_dims, constituents, HLVs, var_list=None, DSIDs=None,
-              adjust_weights=False, verbose=True, pt_scaling=False):
+def load_data(data_type, idx, cuts, n_const, n_dims, constituents, HLVs, HLV_list,
+              var_list=None, DSIDs=None, adjust_weights=False, verbose=True, pt_scaling=False):
     start_time = time.time()
     if np.isscalar(idx): idx = (0, idx)
     data_file = get_file(data_type)
@@ -117,18 +118,23 @@ def load_data(data_type, idx, cuts, n_const, n_dims, constituents, HLVs, var_lis
         sample['constituents'] = np.reshape(sample['constituents'][...,1:], (shape[0],-1)     )
     if verbose: print(' (', '\b'+format(time.time()-start_time, '2.1f'), '\b'+' s)')
     if HLVs == 'ON':
-        sample['HLVs'] = np.hstack([np.float32(sample[key])[:,np.newaxis] for key in ['pt','m','rljet_phi','rljet_eta',
-                                   'rljet_Tau1_wta','rljet_Tau2_wta','rljet_Tau3_wta','d12','d23','ECF2','rljet_ECF3']])
+        if 'tau21' in HLV_list:
+            denominator = np.maximum(sample['rljet_Tau1_wta'], 1e-16)
+            sample['tau21'] = sample['rljet_Tau2_wta']/denominator
+        if 'tau32' in HLV_list:
+            denominator = np.maximum(sample['rljet_Tau2_wta'], 1e-16)
+            sample['tau32'] = sample['rljet_Tau3_wta']/denominator
+        sample['HLVs' ] = np.hstack([np.float32(sample[key])[:,np.newaxis] for key in HLV_list])
     #for key,val in sample.items(): print(key, val.shape, val.dtype)
     return sample
 
 
 def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, cuts='', n_const=20, n_dims=4, constituents='ON', HLVs='ON',
-                var_list=None, DSIDs=None, adjust_weights=False, shuffling=False, verbose=True):
+                HLV_list=None, var_list=None, DSIDs=None, adjust_weights=False, shuffling=False, verbose=True):
     sig_sample = load_data(sig_data, sig_idx, cuts, n_const, n_dims, constituents, HLVs,
-                           var_list, DSIDs, adjust_weights, verbose)
+                           HLV_list, var_list, DSIDs, adjust_weights, verbose)
     bkg_sample = load_data(bkg_data, bkg_idx, cuts, n_const, n_dims, constituents, HLVs,
-                           var_list, DSIDs, adjust_weights, verbose)
+                           HLV_list, var_list, DSIDs, adjust_weights, verbose)
     if 'OoD' in sig_data: sig_sample = OoD_sampling(sig_sample, len(list(bkg_sample.values())[0]))
     sample = {key:np.concatenate([bkg_sample[key], sig_sample[key]]) for key in set(bkg_sample)&set(sig_sample)}
     if shuffling: sample = {key:utils.shuffle(sample[key], random_state=0) for key in sample}

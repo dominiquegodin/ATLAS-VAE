@@ -69,11 +69,11 @@ Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 # SAMPLES SELECTIONS
 bkg_data, OoD_data, sig_data = 'QCD-Geneva', 'OoD-H', '2HDM-Geneva'
 #bkg_data, OoD_data, sig_data = 'QCD-Geneva', 'OoD-H', 'top-Geneva'
-HLVs = ['rljet_Tau1_wta', 'rljet_Tau2_wta', 'rljet_Tau3_wta', 'rljet_eta', 'rljet_phi',
-        'rljet_ECF3'    , 'ECF2'          , 'd12'           , 'd23'      , 'pt'       , 'm']
-if args.constituents == 'ON'  and args.HLVs == 'ON' : input_dim = args.n_dims*args.n_const + len(HLVs)
+HLV_list = ['rljet_Tau1_wta', 'rljet_Tau2_wta', 'rljet_Tau3_wta', 'rljet_eta', 'rljet_ECF3',
+            'ECF2', 'd12', 'd23', 'pt', 'm', 'tau21', 'tau32']
+if args.constituents == 'ON'  and args.HLVs == 'ON' : input_dim = args.n_dims*args.n_const + len(HLV_list)
 if args.constituents == 'ON'  and args.HLVs == 'OFF': input_dim = args.n_dims*args.n_const
-if args.constituents == 'OFF' and args.HLVs == 'ON' : input_dim =                            len(HLVs)
+if args.constituents == 'OFF' and args.HLVs == 'ON' : input_dim =                            len(HLV_list)
 sample_size  = len(list(h5py.File(get_file(bkg_data),'r').values())[0])
 args.n_train = [0                       , min(args.n_train, sample_size-args.n_valid)]
 args.n_valid = [sample_size-args.n_valid, sample_size                                ]
@@ -95,7 +95,7 @@ if args.model_in != args.output_dir[0:args.output_dir.rfind('/')]+'/':
     print('\nLoading pre-trained weights from: ' + args.model_in)
     sys.stdout = open(os.devnull, 'w')   #Stopping screen output
     sample = Batch_Generator(bkg_data, OoD_data, args.n_const, args.n_dims, n_bkg=[0,1],
-                             constituents=args.constituents, HLVs=args.HLVs)
+                             constituents=args.constituents, HLVs=args.HLVs, HLV_list=HLV_list)
     train_model(model, sample, sample, args.OE_type)
     sys.stdout = sys.__stdout__          #Resuming screen output
     model.load_weights(args.model_in)
@@ -105,7 +105,7 @@ if args.const_scaler_type.lower() != '' and os.path.isfile(args.const_scaler_in)
     const_scaler = pickle.load(open(args.const_scaler_in, 'rb'))
 if args.HLV_scaler_type.lower() != '' and os.path.isfile(args.HLV_scaler_in):
     print('\nLoading scaler/transformer from: ' + args.HLV_scaler_in)
-    HLV_scaler = pickle.load(open(args.HLV_scaler_in,   'rb'))
+    HLV_scaler = pickle.load(open(args.HLV_scaler_in, 'rb'))
 
 
 # MODEL TRAINING
@@ -114,7 +114,8 @@ if args.n_epochs > 0:
     or (args.HLV_scaler_type.lower()   != '' and   HLV_scaler == None):
         print('\nLoading QCD training sample'.upper())
         n_jets = min(args.n_train[1], int(1e9*30/args.n_const/args.n_dims/4))
-        train_sample = load_data(bkg_data, n_jets, train_cuts, args.n_const, args.n_dims, args.constituents, args.HLVs)
+        train_sample = load_data(bkg_data, n_jets, train_cuts, args.n_const, args.n_dims,
+                                 args.constituents, args.HLVs, HLV_list)
         if args.constituents == 'ON' and const_scaler == None:
             const_scaler = fit_scaler(train_sample['constituents'], args.n_dims,
                                       args.const_scaler_out, args.const_scaler_type)
@@ -123,7 +124,7 @@ if args.n_epochs > 0:
                                       args.HLV_scaler_out, args.HLV_scaler_type)
     print('\nLoading outlier sample'.upper())
     OoD_sample = load_data(OoD_data, args.n_OoD, train_cuts, args.n_const, args.n_dims,
-                           args.constituents, args.HLVs)
+                           args.constituents, args.HLVs, HLV_list)
     if 'constituents' in OoD_sample:
         OoD_sample['constituents'] = apply_scaler(OoD_sample['constituents'], args.n_dims, const_scaler, 'OoD')
     if 'HLVs' in OoD_sample:
@@ -131,10 +132,10 @@ if args.n_epochs > 0:
     bin_sizes = {'m':20,'pt':40} if args.weight_type.split('_')[0] in ['flat','OoD'] else {'m':10,'pt':20}
     train_sample = Batch_Generator(bkg_data, OoD_data, args.n_const, args.n_dims, args.n_train, OoD_sample,
                                    args.weight_type, train_cuts, multithread, args.constituents, args.HLVs,
-                                   bin_sizes, HLV_scaler, const_scaler, args.output_dir)
+                                   HLV_list, bin_sizes, HLV_scaler, const_scaler, args.output_dir)
     valid_sample = Batch_Generator(bkg_data, OoD_data, args.n_const, args.n_dims, args.n_valid, OoD_sample,
                                    args.weight_type, train_cuts, multithread, args.constituents, args.HLVs,
-                                   bin_sizes, HLV_scaler, const_scaler)
+                                   HLV_list, bin_sizes, HLV_scaler, const_scaler)
     train_model(model, train_sample, valid_sample, args.OE_type, args.n_epochs, args.batch_size, args.beta,
                 args.lamb, args.margin, args.lr, args.hist_file, args.model_in, args.model_out)
     model.load_weights(args.model_out)
@@ -144,8 +145,8 @@ if args. plotting == 'OFF' and args.apply_cut == 'OFF': sys.exit()
 # MODEL PREDICTIONS ON VALIDATION SAMPLE
 print('\n+'+36*'-'+'+\n+--- VALIDATION SAMPLE EVALUATION ---+\n+'+36*'-'+'+\n')
 #DSIDs: 302321,310464,449929,450282,450283,450284
-valid_sample = make_sample(bkg_data, sig_data, args.n_valid, args.n_sig, valid_cuts, args.n_const,
-                           args.n_dims, args.constituents, args.HLVs, DSIDs=None, adjust_weights=False)
+valid_sample = make_sample(bkg_data, sig_data, args.n_valid, args.n_sig, valid_cuts, args.n_const, args.n_dims,
+                           args.constituents, args.HLVs, HLV_list, DSIDs=None, adjust_weights=False)
 y_true = np.where(valid_sample['JZW']==-1, 0, 1)
 if 'Geneva' in sig_data: valid_sample['weights'][y_true==0] /= 1e3 #Adjusting weights for Delphes samples
 #sample_distributions(valid_sample, sig_data, args.output_dir, 'valid'); sys.exit()
