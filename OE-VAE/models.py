@@ -4,6 +4,17 @@ import h5py, time, sys, os, pickle
 from   tensorflow.keras import layers, models, initializers
 
 
+class Sampling(layers.Layer):
+    """ Using (z_mean, z_log_var) to sample z """
+    def call(self, inputs, seed):
+        z_mean, z_log_var = inputs
+        sigma = tf.exp(z_log_var/2)
+        sigma = clip_values(sigma, max_val=1e6)
+        tf.random.set_seed(seed)
+        #return tf.random.normal(tf.shape(z_mean), seed=seed)*sigma + z_mean
+        return tf.random.normal(tf.shape(z_mean), mean=z_mean, stddev=sigma, seed=seed)
+
+
 class Encoder(layers.Layer):
     """ Mapping inputs to (z_mean, z_log_var, z) """
     def __init__(self, FC_layers, activation, seed=None, name="encoder", **kwargs):
@@ -58,17 +69,6 @@ class VariationalAutoEncoder(models.Model):
         return reconstructed
 
 
-class Sampling(layers.Layer):
-    """ Using (z_mean, z_log_var) to sample z """
-    def call(self, inputs, seed):
-        z_mean, z_log_var = inputs
-        sigma = tf.exp(z_log_var/2)
-        sigma = clip_values(sigma, max_val=1e6)
-        tf.random.set_seed(seed)
-        #return tf.random.normal(tf.shape(z_mean), seed=seed)*sigma + z_mean
-        return tf.random.normal(tf.shape(z_mean), mean=z_mean, stddev=sigma, seed=seed)
-
-
 def get_reconstruction_loss(batch_input, batch_output, OE_type):
     if OE_type == 'MSE' or OE_type == 'MSE-margin':
         return tf.keras.losses.MSE(batch_input, batch_output)
@@ -99,7 +99,6 @@ def get_OE_loss(vae, batch_X, batch_X_OE, OE_type, margin):
     reconstructed_OE = vae(batch_X_OE)
     loss_MSE    = get_reconstruction_loss(batch_X   , reconstructed   , OE_type)
     loss_MSE_OE = get_reconstruction_loss(batch_X_OE, reconstructed_OE, OE_type)
-
     if OE_type == 'MSE' or OE_type == 'MAE':
         return tf.keras.activations.sigmoid(loss_MSE - loss_MSE_OE         )
     if OE_type == 'MSE-margin' or OE_type == 'MAE-margin':
@@ -122,7 +121,6 @@ def get_losses(vae, data, OE_type, beta, lamb, margin):
     """ MSE reconstruction loss """
     reconstructed = vae(bkg_batch_X)
     loss_MSE = get_reconstruction_loss(bkg_batch_X, reconstructed, OE_type)
-
     loss_MSE = tf.math.multiply(loss_MSE, bkg_weights)
     """ KLD regularization loss """
     loss_KLD = sum(vae.losses)

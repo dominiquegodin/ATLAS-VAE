@@ -447,7 +447,8 @@ def loss_distributions(y_true, X_loss, weights, metric, output_dir, best_loss=No
     plt.ylabel('Distribution Density (%)', fontsize=24)
     plt.legend(loc='upper left', fontsize=18)
     output_dir += '/metrics_losses'
-    if not os.path.isdir(output_dir): os.mkdir(output_dir)
+    try   : os.mkdir(output_dir)
+    except: pass
     file_name = output_dir+'/'+metric+'_loss.png'
     print('Saving metric loss       to:', file_name); plt.savefig(file_name)
 
