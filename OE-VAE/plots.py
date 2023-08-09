@@ -73,13 +73,6 @@ def mass_deco(y_true, sample, X_loss, deco='2d'):
     pt_bins = [get_pt_bins(mass, pt, m_range, deco) for m_range in zip(m_bins[:-1], m_bins[1:])]
     m_idx  =  np.clip(np.digitize(mass, m_bins), 1, len(m_bins)-1)-1
     pt_idx = [np.clip(np.digitize(pt  ,   bins), 1, len(  bins)-1)-1 for bins in pt_bins]
-    #for m in range(len(pt_idx)):
-    #    print( m, np.max(pt_idx[m]) )
-    #total = 0
-    #for m in range(len(pt_idx)):
-    #    for n in range(np.max(pt_idx[m])+1):
-    #        total += np.sum(np.logical_and(m_idx==m,pt_idx[m]==n))
-    #print(total)
     cdf_list = [[cum_distribution(loss[np.logical_and(m_idx==m, pt_idx[m]==n)])
                  for n in range(np.max(pt_idx[m])+1)] for m in range(len(pt_idx))]
     mass, pt, loss = sample['m'], sample['pt'], X_loss
