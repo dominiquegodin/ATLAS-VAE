@@ -34,8 +34,9 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_me
     if normal_losses == 'ON' or decorrelation == 'ON':
         X_losses = {key:loss_mapping(val) for key,val in X_losses.items()}
     if decorrelation == 'ON':
-        X_losses[loss_metric] = mass_decorrelation(y_true, sample['m' ], X_losses[loss_metric])
-        X_losses[loss_metric] = mass_decorrelation(y_true, sample['pt'], X_losses[loss_metric])
+        #X_losses[loss_metric] = mass_deco(y_true, sample, X_losses[loss_metric], deco='m')
+        #X_losses[loss_metric] = mass_deco(y_true, sample, X_losses[loss_metric], deco='pt')
+        X_losses[loss_metric] = mass_deco(y_true, sample, X_losses[loss_metric], deco='2d')
     best_loss  = bump_scan(y_true, X_losses[loss_metric], loss_metric, sample, sig_data, output_dir)
     processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
     arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, loss_metric, output_dir)]
@@ -50,11 +51,12 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_me
     print()
 
 
-def get_bins(mass, max_bins=50, min_bin_count=2, logspace=True):
-    if logspace: m_bins = np.logspace(np.log10(np.min(mass)), np.log10(np.max(mass)), num=max_bins)
-    else       : m_bins = np.linspace(         np.min(mass) ,          np.max(mass) , num=max_bins)
+def get_bins(var, deco, max_bins=100, min_bin_count=2, logspace=True):
+    if not deco: return [np.min(var), np.max(var)]
+    if logspace: m_bins = np.logspace(np.log10(np.min(var)), np.log10(np.max(var)), num=max_bins)
+    else       : m_bins = np.linspace(         np.min(var) ,          np.max(var) , num=max_bins)
     while True:
-        m_idx = np.clip(np.digitize(mass, m_bins), 1, len(m_bins)-1) - 1
+        m_idx = np.clip(np.digitize(var, m_bins), 1, len(m_bins)-1) - 1
         for idx in range(len(m_bins)-1)[::-1]:
             if np.sum(m_idx==idx) < max(2, min_bin_count):
                 m_bins = np.delete(m_bins, idx)
@@ -63,14 +65,31 @@ def get_bins(mass, max_bins=50, min_bin_count=2, logspace=True):
 def cum_distribution(x):
     values, counts = [np.insert(array, 0, 0) for array in np.unique(x, return_counts=True)]
     return interpolate.interp1d(values, np.cumsum(counts)/len(x), fill_value=(0,1), bounds_error=False)
-def mass_decorrelation(y_true, X_mass, X_loss, mass_bins=None):
-    mass, loss = X_mass[y_true==1], X_loss[y_true==1]
-    if mass_bins is None: mass_bins = get_bins(mass)
-    mass_idx = np.clip(np.digitize(  mass, mass_bins), 1, len(mass_bins)-1) - 1
-    cdf_list = [cum_distribution(loss[mass_idx==idx]) for idx in range(len(mass_bins)-1)]
-    mass_idx = np.clip(np.digitize(X_mass, mass_bins), 1, len(mass_bins)-1) - 1
-    for idx in range(len(mass_bins)-1): X_loss[mass_idx==idx] = cdf_list[idx](X_loss[mass_idx==idx])
-    return X_loss
+def mass_deco(y_true, sample, X_loss, deco='2d'):
+    def get_pt_bins(mass, pt, m_range, deco):
+        return get_bins(pt[np.logical_and(mass>=m_range[0], mass<m_range[1])], False if deco=='m' else True)
+    mass, pt, loss = sample['m'][y_true==1], sample['pt'][y_true==1], X_loss[y_true==1]
+    m_bins  =  get_bins(mass, False if deco=='pt' else True)
+    pt_bins = [get_pt_bins(mass, pt, m_range, deco) for m_range in zip(m_bins[:-1], m_bins[1:])]
+    m_idx  =  np.clip(np.digitize(mass, m_bins), 1, len(m_bins)-1)-1
+    pt_idx = [np.clip(np.digitize(pt  ,   bins), 1, len(  bins)-1)-1 for bins in pt_bins]
+    #for m in range(len(pt_idx)):
+    #    print( m, np.max(pt_idx[m]) )
+    #total = 0
+    #for m in range(len(pt_idx)):
+    #    for n in range(np.max(pt_idx[m])+1):
+    #        total += np.sum(np.logical_and(m_idx==m,pt_idx[m]==n))
+    #print(total)
+    cdf_list = [[cum_distribution(loss[np.logical_and(m_idx==m, pt_idx[m]==n)])
+                 for n in range(np.max(pt_idx[m])+1)] for m in range(len(pt_idx))]
+    mass, pt, loss = sample['m'], sample['pt'], X_loss
+    m_idx  =  np.clip(np.digitize(mass, m_bins), 1, len(m_bins)-1)-1
+    pt_idx = [np.clip(np.digitize(pt  ,   bins), 1, len(  bins)-1)-1 for bins in pt_bins]
+    for m in range(len(pt_idx)):
+        for n in range(np.max(pt_idx[m])+1):
+            selections = np.logical_and(m_idx==m, pt_idx[m]==n)
+            loss[selections] = cdf_list[m][n](loss[selections])
+    return loss
 
 
 def generate_cuts(y_true, sample, X_loss, loss_metric, sig_data, output_dir, cut_types=['bkg_eff','gain']):
