@@ -458,13 +458,9 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,1000], bins=2
     hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=make_histo and print_info)
     filename = None if output_dir==None else output_dir+'/'+'BH_'+cut_type+'.png'
     if make_histo: print('Saving bump hunting plot to:', filename)
-    max_sig = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
-    if make_histo and print_info:
-        hunter.print_bump_info()
-        hunter.print_bump_true(data_hist, bkg_hist, is_hist=True)
-        print(format(time.time() - start_time, '2.1f'), '\b'+' s')
-    else:
-        return max_sig
+    bin_sigma, _ = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
+    max_sigma, loc_sigma = np.max(sig), hunter.bump_info(data_hist, verbose=make_histo and print_info)
+    return log_sigma
 
 
 def filtering(y_true, X_true, X_pred, sample):
