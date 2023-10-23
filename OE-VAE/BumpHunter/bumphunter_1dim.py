@@ -1843,11 +1843,6 @@ class BumpHunter1D:
             plt.hist(H[1][:-1], bins=H[1], range=self.rang, weights=sig)
             plt.plot(np.full(2, Bmin), np.array([sig.min(), sig.max()]), "r--", linewidth=2)
             plt.plot(np.full(2, Bmax), np.array([sig.min(), sig.max()]), "r--", linewidth=2)
-
-            array = np.linspace(self.rang[0], self.rang[1], num=1000)
-            plt.plot(array, A_approx*Gaussian((array-B_approx)/C_approx, height, mean, std),
-                     color='black', lw=2, zorder=10)
-
             plt.yticks(
                 np.arange(np.round(sig.min()), np.round(sig.max()) + 1, step=1),
                 fontsize="xx-large",
