@@ -460,7 +460,7 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,1000], bins=2
     if make_histo: print('Saving bump hunting plot to:', filename)
     bin_sigma, _ = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
     max_sigma, loc_sigma = np.max(sig), hunter.bump_info(data_hist, verbose=make_histo and print_info)
-    return log_sigma
+    return loc_sigma
 
 
 def filtering(y_true, X_true, X_pred, sample):
