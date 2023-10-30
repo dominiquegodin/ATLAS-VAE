@@ -4,8 +4,9 @@ import multiprocessing as mp
 import os, sys, h5py, time, pickle, warnings, itertools
 from   sklearn       import preprocessing, metrics, utils
 from   scipy.spatial import distance
-from   scipy         import stats
+from   scipy         import stats, optimize
 from   energyflow    import emd
+from   BumpHunter.bumphunter_1dim import BumpHunter1D
 
 
 def get_file(data_type, host_name='atlas'):
@@ -436,7 +437,7 @@ def inverse_scaler(sample, n_dims, scaler, reshape=False):
     print('(', '\b'+format(time.time() - start_time, '2.1f'), '\b'+' s)')
     return sample
 
-
+'''
 def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,1000], bins=200,
                 make_histo=True, print_info=True, logspace=False):
     #import pyBumpHunter as BH; sys.path.append('../')
@@ -461,6 +462,66 @@ def bump_hunter(sample, output_dir=None, cut_type=None, m_range=[0,1000], bins=2
     bin_sigma, _ = hunter.plot_bump(data_hist, bkg_hist, is_hist=True, filename=filename, make_histo=make_histo)
     max_sigma, loc_sigma = np.max(bin_sigma), hunter.bump_info(data_hist, verbose=make_histo and print_info)
     return loc_sigma
+'''
+
+def bump_hunter(sample, filename=None, sig_label=None, max_sigma=None,
+                m_range=[0,800], bin_size=5, print_info=False, logspace=False):
+    verbose = filename is not None and print_info
+    y_true = np.where(sample['JZW']==-1, 0, 1)
+    data, data_weights = sample['m']    , sample['weights']
+    bkg , bkg_weights  = data[y_true==1], data_weights[y_true==1]
+    m_min = max(m_range[0], np.min(bkg))
+    m_max = min(m_range[1], np.max(bkg))
+    if logspace: bins = np.logspace(np.log10(max(1,m_min)), np.log10(m_max), num=100)
+    else:        bins = get_idx(m_max, bin_size=bin_size, min_val=m_min, integer=False, tuples=False)
+    bins = get_bins(bkg, bins, min_bin_count=20)
+    data_hist, bin_edges = np.histogram(data, bins=bins, range=m_range, weights=data_weights)
+    bkg_hist , bin_edges = np.histogram(bkg , bins=bins, range=m_range, weights= bkg_weights)
+    #import pyBumpHunter as BH; sys.path.append('../')
+    #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
+    """ BumpHunter1D class instance """
+    hunter = BumpHunter1D(rang=m_range, width_min=2, width_max=6, width_step=1, scan_step=1,
+                          npe=1000, nworker=1, seed=None, bins=bin_edges)
+    #hunter = BH.BumpHunter1D(rang=m_range, width_min=1, width_max=10, width_step=1, scan_step=1,
+    #                         npe=100, nworker=1, seed=None, bins=bin_edges)
+    hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=verbose)
+    bin_sigma, bump_range = hunter.plot_bump(data_hist, bkg_hist, is_hist=True)
+    try:
+        gaussian_par = fit_gaussian(bins, bin_sigma, bump_range)
+    except:
+        try: gaussian_par = fit_gaussian(bins, bin_sigma)
+        except Exception as error: pass #print(error)
+    loc_sigma = hunter.bump_info(data_hist, verbose=verbose)
+    if max_sigma is None:
+        max_sigma = gaussian_par[0]*gaussian_par[3]
+    if filename is not None:
+        from plots import plot_bump
+        plot_bump(data, data_weights, y_true, bins, bin_sigma, loc_sigma, max_sigma,
+                  bump_range, m_range, gaussian_par, sig_label, filename)
+    return loc_sigma, max_sigma
+def get_bins(var, var_bins=None, max_bins=100, min_bin_count=2, logspace=True, deco=True):
+    if not deco: return [np.min(var), np.max(var)]
+    if var_bins is None:
+        if logspace: var_bins = np.logspace(np.log10(np.min(var)), np.log10(np.max(var)), num=max_bins)
+        else       : var_bins = np.linspace(         np.min(var) ,          np.max(var) , num=max_bins)
+    while True:
+        var_idx = np.clip(np.digitize(var, var_bins), 1, len(var_bins)-1) - 1
+        for idx in range(len(var_bins)-1)[::-1]:
+            if np.sum(var_idx==idx) < max(2, min_bin_count):
+                var_bins = np.delete(var_bins, idx)
+                break
+        if idx == 0: return var_bins
+def Gaussian(x, A, B, C):
+    return A*np.exp(-(x-B)**2/(2*C**2))
+def fit_gaussian(bins, bin_sigma, bump_range=None):
+    x_val, y_val = (bins[:-1]+bins[1:])/2, bin_sigma
+    if bump_range is None: selections = x_val != 0
+    else                 : selections = np.logical_and(x_val>=bump_range[0], x_val<=bump_range[1])
+    x_val, y_val = x_val[selections], y_val[selections]
+    A_approx, B_approx, C_approx = np.max(y_val), x_val[np.argmax(y_val)], np.sqrt(np.var(x_val))
+    x_val, y_val = (x_val - B_approx)/C_approx, y_val/A_approx
+    height, mean, std = optimize.curve_fit(Gaussian, x_val, y_val)[0]
+    return A_approx, B_approx, C_approx, height, mean, std
 
 
 def filtering(y_true, X_true, X_pred, sample):

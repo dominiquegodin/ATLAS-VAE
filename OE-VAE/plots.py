@@ -2,7 +2,7 @@ import numpy             as np
 import multiprocessing   as mp
 import matplotlib.pyplot as plt
 import os, sys, h5py, time, pickle, warnings
-from matplotlib import pylab, ticker
+from matplotlib import pylab, ticker, patches, colors as mcolors, font_manager
 from sklearn    import metrics
 from scipy      import spatial, interpolate
 from functools  import partial
@@ -38,14 +38,14 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_me
         #X_losses[loss_metric] = mass_deco(y_true, sample, X_losses[loss_metric], deco='pt')
         X_losses[loss_metric] = mass_deco(y_true, sample, X_losses[loss_metric], deco='2d')
     best_loss  = bump_scan(y_true, X_losses[loss_metric], loss_metric, sample, sig_data, output_dir)
-    processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
-    arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, loss_metric, output_dir)]
-    processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
-    arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir, best_loss) for metric in metrics]
-    processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
+    #processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
+    #arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, loss_metric, output_dir)]
+    #processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
+    #arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir, best_loss) for metric in metrics]
+    #processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=tSNE, args=(y_true,  X_true, model, output_dir))]
-    for job in processes: job.start()
-    for job in processes: job.join()
+    #for job in processes: job.start()
+    #for job in processes: job.join()
     if apply_cuts == 'ON':
         generate_cuts(y_true, sample, X_losses[loss_metric], loss_metric, sig_data, output_dir)
     print()
@@ -277,12 +277,13 @@ def bump_scan(y_true, X_loss, loss_metric, sample, sig_data, output_dir, n_cuts=
     global get_sigma
     def get_sigma(sample, X_loss, thresholds, idx):
         cut_sample = {key:sample[key][X_loss>thresholds[idx]] for key in sample}
-        try   : return bump_hunter(cut_sample, make_histo=False)
-        except: return None
+        try   : return bump_hunter(cut_sample)
+        except: return None, None
     with mp.Pool() as pool:
         sigma = np.array(pool.map(partial(get_sigma, sample, X_loss, thresholds), idx))
-    thresholds, eff = np.take(thresholds, idx), np.take(eff, idx)
+    sigma, _ = [np.array(array) for array in zip(*sigma)]
     none_filter = sigma != np.array(None)
+    thresholds, eff = np.take(thresholds, idx), np.take(eff, idx)
     thresholds, eff, sigma = thresholds[none_filter], eff[none_filter], sigma[none_filter]
     if len(sigma) == 0: return None
     plt.figure(figsize=(13,8)); pylab.grid(True); axes = plt.gca()
@@ -319,9 +320,204 @@ def bump_scan(y_true, X_loss, loss_metric, sample, sig_data, output_dir, n_cuts=
     """ Printing bkg suppression and bum hunting plots at maximum significance cut """
     best_loss = {'metric':loss_metric, 'eff':eff[np.argmax(sigma)], 'loss':thresholds[np.argmax(sigma)]}
     cut_sample = {key:sample[key][X_loss>best_loss['loss']] for key in sample}
-    bump_hunter(cut_sample, output_dir, cut_type='best', print_info=False)
+    bump_hunter(cut_sample, sig_label=None, max_sigma=None, filename=output_dir+'/BH_best.png' , print_info=False)
     sample_distributions([sample,cut_sample], sig_data, output_dir, 'BH_bkg_supp', bin_sizes={'m':2.5,'pt':10})
     return best_loss
+
+'''
+def bump_scan(y_true, X_loss, loss_metric, sample, sig_data, output_dir, n_cuts=100, eff_type='bkg'):
+    font_manager._get_font.cache_clear()
+    if   'top'  in sig_data: sig_label = 'Top'
+    elif 'VZ'   in sig_data: sig_label = 'VZ'
+    elif 'BSM'  in sig_data: sig_label = 'BSM'
+    elif 'OoD'  in sig_data: sig_label = 'OoD'
+    elif '2HDM' in sig_data: sig_label = '2HDM'
+    else                   : sig_label = 'N.A.'
+    def logit(x, delta=1e-16):
+        x = np.clip(np.float64(x), delta, 1-delta)
+        return np.log10(x) - np.log10(1-x)
+    def inverse_logit(x)     : return 1/(1+10**(-x))
+    fpr, tpr, thresholds = get_rates(y_true, X_loss, sample['weights'])
+    cut_thresholds = thresholds
+    if eff_type == 'sig':
+        cut_eff = tpr
+        x_min, x_max = 10*np.floor(tpr[0]/10), 100
+        eff_val = np.linspace(tpr[0], x_max, n_cuts)
+    elif eff_type == 'bkg':
+        cut_eff = fpr
+        x_min, x_max = 10**np.ceil(np.log10(np.min(fpr))), 100
+        eff_val = np.append(100*inverse_logit(np.linspace(logit(x_min/100),-logit(x_min/100),n_cuts)), 100)
+    idx = np.minimum(np.searchsorted(cut_eff, eff_val, side='right'), len(cut_eff)-1)
+    sample = {key:sample[key] for key in ['JZW','m','pt','weights']}
+    global get_sigma
+    def get_sigma(sample, X_loss, cut_thresholds, idx):
+        cut_sample = {key:sample[key][X_loss>cut_thresholds[idx]] for key in sample}
+        try   : return bump_hunter(cut_sample)
+        except: return None, None
+    with mp.Pool() as pool:
+        sigma = np.array(pool.map(partial(get_sigma, sample, X_loss, cut_thresholds), idx))
+    loc_sigma, max_sigma = [np.array(array) for array in zip(*sigma)]
+    none_filter = np.logical_and(loc_sigma!=np.array(None), max_sigma!=np.array(None))
+    cut_thresholds, cut_eff   = np.take(cut_thresholds,idx), np.take(cut_eff,idx)
+    cut_thresholds, cut_eff   = cut_thresholds[none_filter],   cut_eff[none_filter]
+    loc_sigma     , max_sigma =      loc_sigma[none_filter], max_sigma[none_filter]
+    if len(cut_thresholds) == 0:
+        print('FAILED')
+        return
+    """ Printing bkg suppression and bum hunting plots at maximum significance cut """
+    opt_max_sigma = np.max(max_sigma)
+    loc_sigma, max_sigma = loc_sigma/loc_sigma[-1], max_sigma/max_sigma[-1]
+    opt_sigma = loc_sigma if np.max(loc_sigma)>=np.max(max_sigma) else max_sigma
+    best_cut = {'metric':loss_metric, 'cut':cut_thresholds[np.argmax(opt_sigma)]}
+    best_cut['eff'    ] = cut_eff[np.argmax(opt_sigma)]
+    best_cut['bkg_eff'] = fpr[np.argmin(np.abs(thresholds-best_cut['cut']))]
+    best_cut['sig_eff'] = tpr[np.argmin(np.abs(thresholds-best_cut['cut']))]
+    cut_sample = {key:sample[key][X_loss>best_cut['cut']] for key in sample}
+    #plot_significance(cut_eff, eff_type, loc_sigma, max_sigma, opt_sigma, x_min, x_max, output_dir)
+    #bump_hunter(    sample, sig_label, opt_max_sigma, filename=output_dir+'/BH_uncut.png', print_info=False)
+    #bump_hunter(cut_sample, sig_label, opt_max_sigma, filename=output_dir+'/BH_best.png' , print_info=False)
+    #sample_distributions([sample,cut_sample], sig_label, output_dir, 'BH_bkg_supp', bin_sizes={'m':5,'pt':10})
+    arguments  = (cut_eff, eff_type, loc_sigma, max_sigma, opt_sigma, x_min, x_max, output_dir)
+    processes  = [mp.Process(target=plot_significance, args=arguments)]
+    arguments  = (    sample, output_dir+'/BH_uncut.png', sig_label, opt_max_sigma)
+    processes += [mp.Process(target=bump_hunter, args=arguments)]
+    arguments  = (cut_sample, output_dir+'/BH_best.png' , sig_label, opt_max_sigma)
+    processes += [mp.Process(target=bump_hunter, args=arguments)]
+    arguments  = ([sample,cut_sample], sig_label, output_dir, 'BH_bkg_supp', {'m':5,'pt':10})
+    processes += [mp.Process(target=sample_distributions, args=arguments)]
+    for job in processes: job.start()
+    for job in processes: job.join()
+    return best_cut
+'''
+
+def plot_significance(cut_eff, eff_type, loc_sigma, max_sigma, opt_sigma, x_min, x_max, output_dir):
+    plt.figure(figsize=(12,8)); pylab.grid(False); axes = plt.gca()
+    plt.plot(cut_eff, max_sigma, label='Best Bin $\sigma$', color='silver', lw=4)
+    plt.plot(cut_eff, loc_sigma, label='Local $\sigma$'   , color='gray'  , lw=4)
+    all_sigma = np.append(loc_sigma, max_sigma)
+    if   np.max(all_sigma)-np.min(all_sigma) >= 10: factor, val_pre = (10  ,'.0f')
+    elif np.max(all_sigma)-np.min(all_sigma) >=  1: factor, val_pre = ( 1  ,'.1f')
+    else                                          : factor, val_pre = ( 0.1,'.2f')
+    x_min = min(1,x_min)
+    y_min, y_max = factor*np.floor(np.min(all_sigma)/factor), factor*np.ceil(np.max(all_sigma)/factor)
+    pylab.xlim(x_min, x_max)
+    pylab.ylim(y_min, y_max)
+    max_val, end_val, max_eff = np.max(opt_sigma), opt_sigma[-1], cut_eff[np.argmax(opt_sigma)]
+    #plt.text(1.004, (end_val-axes.get_ylim()[0])/np.diff(axes.get_ylim()), format(end_val,'.0f'),
+    #         {'color':'black','fontsize':14}, va="center", ha="left", transform=axes.transAxes)
+    plt.text(1.004, (max_val-axes.get_ylim()[0])/np.diff(axes.get_ylim()), format(max_val,val_pre),
+             {'color':'black','fontsize':14}, va="center", ha="left", transform=axes.transAxes)
+    plt.text((np.log10(max_eff)-np.log10(x_min))/(np.log10(x_max)-np.log10(x_min)), 1.018, format(max_eff,'.1f'),
+             {'color':'black','fontsize':14}, va='center', ha='center', transform=axes.transAxes)
+    axes.xaxis.set_minor_locator(ticker.AutoMinorLocator(10))
+    axes.tick_params(which='minor', direction='in', length=5, width=1.5, colors='black',
+                     bottom=True, top=True, left=True, right=True)
+    axes.tick_params(which='major', direction='in', length=7, width=3, colors='black',
+                     bottom=True, top=True, left=True, right=True)
+    axes.tick_params(axis="both", pad=5, labelsize=22)
+    for axis in ['top', 'bottom', 'left', 'right']:
+        axes.spines[axis].set_linewidth(3)
+        axes.spines[axis].set_color('black')
+    if eff_type == 'sig':
+        xmin = (max_eff-x_min)/(x_max-x_min)
+        plt.xlabel('$\epsilon_{\operatorname{sig}}$ (%)', fontsize=30, labelpad=5)
+    elif eff_type == 'bkg':
+        plt.xlabel('$\epsilon_{\operatorname{bkg}}$ (%)', fontsize=30, labelpad=5)
+        plt.xscale('log')
+        pos    = [10**int(n) for n in range(int(np.log10(x_min)),3)]
+        labels = [('$10^{'+str(n)+'}$' if n<=-1 else int(10**n))for n in range(int(np.log10(x_min)),3)]
+        plt.xticks(pos, labels)
+        xmin = (np.log10(max_eff)-np.log10(x_min))/(np.log10(x_max)-np.log10(x_min))
+    axes.axhline(max_val, xmin=xmin, xmax=1, ls='--', linewidth=1.5, color='tab:gray')
+    axes.axvline(max_eff, ymin=(max_val-y_min)/(y_max-y_min), ymax=1, ls='--', linewidth=1.5, color='tab:gray')
+    #plt.ylabel('BH Significance', fontsize=26)
+    plt.ylabel('$\sigma_{\operatorname{cut}}/\sigma_{\operatorname{uncut}}$', fontsize=30, labelpad=5)
+    plt.legend(loc='best', fontsize=20, facecolor='ghostwhite', frameon=False, framealpha=1)
+    plt.subplots_adjust(left=0.11, top=0.97, bottom=0.15, right=0.96)
+    file_name = output_dir+'/'+'BH_sigma.png'
+    print('Saving BH significance   to:', file_name); plt.savefig(file_name)
+
+
+def plot_bump(data, data_weights, y_true, bins, bin_sigma, loc_sigma, max_sigma,
+              bump_range, m_range, gaussian_par, sig_label, filename, log=False):
+    def Gaussian(x, A, B, C): return A*np.exp(-(x-B)**2/(2*C**2))
+    labels     = {0:'QCD', 1:sig_label}
+    color_dict = {labels[0]:'tab:blue', labels[1]:'tab:orange'}
+    fig, (ax1,ax2) = plt.subplots(figsize=(12,8), ncols=1, nrows=2, sharex=True,
+                                          gridspec_kw={'height_ratios':[3,1]})
+    data_weights  = 100*data_weights/(np.sum(data_weights))
+    indices       = np.searchsorted(bins, data, side='right')
+    data_weights /= np.take(np.diff(bins), np.minimum(indices, len(bins)-1)-1)
+    bkg_data, bkg_weights = data[y_true==1], data_weights[y_true==1]
+    sig_data, sig_weights = data[y_true==0], data_weights[y_true==0]
+    samples = [bkg_data   , sig_data   ]
+    weights = [bkg_weights, sig_weights]
+    ax1.hist(samples, bins, weights=weights, histtype='barstacked', log=log, lw=3, alpha=0.2, clip_on=True,
+             label=[labels[0],labels[1]], color=[color_dict[key] for key in [labels[0],labels[1]]], zorder=0)
+    for n in [1,0]:
+        merged_samples = np.concatenate([samples[n] for n in range(n+1)])
+        merged_weights = np.concatenate([weights[n] for n in range(n+1)])
+        H = ax1.hist(merged_samples, bins=bins, weights=merged_weights, histtype='step', log=log,
+                     lw=3, fill=False, zorder=0, edgecolor=color_dict[labels[n]], alpha=1, clip_on=True)
+        if n == 1:
+            vlines_y = H[0][np.argmin(np.abs(bump_range[0]-bins))], H[0][np.argmin(np.abs(bump_range[1]-bins))]
+    ax1.vlines(bump_range, 0, vlines_y, colors='tab:red', ls=(0,(4,1)), lw=2, label='Bump', zorder=0)
+    ax2.hist(bins[:-1], bins, histtype='step', weights=bin_sigma, lw=3, fill=True, clip_on=True, zorder=0,
+             edgecolor=mcolors.to_rgba('darkgray')[:-1]+(1,),facecolor=mcolors.to_rgba('gray')[:-1]+(0.2,))
+    array = np.linspace(m_range[0], m_range[1], num=1000)
+    A_approx, B_approx, C_approx, height, mean, std = gaussian_par
+    ax2.plot(array, A_approx*Gaussian((array-B_approx)/C_approx, height, mean, std),
+             color='dimgray', lw=2, zorder=10)
+    ax2.axvline(bump_range[0], 0, 1, color='tab:red', ls=(0,(4,1)), lw=2, zorder=0)
+    ax2.axvline(bump_range[1], 0, 1, color='tab:red', ls=(0,(4,1)), lw=2, zorder=0)
+    handles, labels = ax1.get_legend_handles_labels()
+    handles = [patches.Patch(edgecolor=h.get_facecolor()[:-1]+(1,), facecolor=h.get_facecolor(),
+                             fill=True, lw=3) for h in handles[:-1]] + [handles[-1]]
+    ax1.legend(handles, labels, loc='upper right', frameon=False, fontsize=20)
+    for AX in [ax1, ax2]:
+        AX.tick_params(which='minor', direction='in', length=5, width=1.5, colors='black',
+                         bottom=True, top=True, left=True, right=True, zorder=20)
+        AX.tick_params(which='major', direction='in', length=7, width=3, colors='black',
+                         bottom=True, top=True, left=True, right=True, zorder=20)
+        AX.tick_params(axis="x", pad=5, labelsize=22)
+        AX.tick_params(axis="y", pad=5, labelsize=22)
+        for axis in ['top', 'bottom', 'left', 'right']:
+            AX.spines[axis].set_linewidth(3)
+            AX.spines[axis].set_zorder(20)
+    ax1.set_ylabel('Probability Density (%)', loc='center', fontsize=26, labelpad=5)
+    ax1.set_xlim(m_range)
+    ax1.xaxis.set_minor_locator(ticker.AutoMinorLocator(5))
+    x_max = min(m_range[1], bins[np.where(bin_sigma>max_sigma/50)[0][-1]] )
+    x_max = 100*np.ceil(x_max/100)
+    ax1.set_xlim(m_range[0],x_max)
+    if log:
+        y_min = np.floor(np.log10(np.min(H[0])))
+        ax1.set_ylim(10**y_min, None)
+    else:
+        y_max = np.ceil(10*np.max(H[0]))/10
+        ax1.set_ylim(0, y_max)
+    ax2.set_xlabel('$m\,$(GeV)', loc='center', fontsize=30, labelpad=5)
+    ax2.set_ylabel('$\sigma$'  , loc='center', fontsize=30, labelpad=5)
+    if max_sigma <= 5:
+        factor = 1 ; ax2.set_yticks([0,1,2,3,4,5])
+    elif max_sigma <= 10:
+        factor = 2 ; ax2.set_yticks([0,2,4,6,8,10])
+    elif max_sigma <= 25:
+        factor = 5 ; ax2.set_yticks([0,5,10,15,20,25])
+    else:
+        factor = 10
+    y_max = factor*np.ceil(max_sigma/factor)
+    ax2.set_ylim(0, y_max)
+    plt.text(bump_range[1]/x_max+0.02, np.max(bin_sigma)/y_max-0.05,
+             '$\,\sigma_{\operatorname{local}}\,\,=$'+format(loc_sigma,'.1f'),
+             {'color':'black','fontsize':14}, va='top', ha='left', transform=ax2.transAxes)
+    plt.text(bump_range[1]/x_max+0.02, np.max(bin_sigma)/y_max-0.22,
+             '$m_{\operatorname{bump}}\!=$'+format(mean*C_approx+B_approx,'.1f')+'$\,$GeV',
+             {'color':'black','fontsize':14}, va='top', ha='left', transform=ax2.transAxes)
+    fig.align_labels()
+    fig.subplots_adjust(left=0.11, right=0.96, bottom=0.15, top=0.97, hspace=0.08)
+    print('Saving bump hunting plot to:', filename)
+    plt.savefig(filename, bbox_inches="tight")
 
 
 def mass_distances(y_true, X_losses, X_mass, weights, metric, eff_type, truth, distance_dict, n_cuts=100):
