@@ -260,6 +260,13 @@ def make_cut(y_true, X_loss, sample, positive_rates, metric, cut_type, bkg_eff=N
 
 
 def bump_scan(y_true, X_loss, loss_metric, sample, sig_data, output_dir, n_cuts=100, eff_type='bkg'):
+    font_manager._get_font.cache_clear()
+    if   'top'  in sig_data: sig_label = 'Top'
+    elif 'VZ'   in sig_data: sig_label = 'VZ'
+    elif 'BSM'  in sig_data: sig_label = 'BSM'
+    elif 'OoD'  in sig_data: sig_label = 'OoD'
+    elif '2HDM' in sig_data: sig_label = '2HDM'
+    else                   : sig_label = 'N.A.'
     def logit(x, delta=1e-16): return np.log10(x) - np.log10(1-x)
     def inverse_logit(x)     : return 1/(1+10**(-x))
     fpr, tpr, thresholds = get_rates(y_true, X_loss, sample['weights'])
@@ -320,7 +327,7 @@ def bump_scan(y_true, X_loss, loss_metric, sample, sig_data, output_dir, n_cuts=
     """ Printing bkg suppression and bum hunting plots at maximum significance cut """
     best_loss = {'metric':loss_metric, 'eff':eff[np.argmax(sigma)], 'loss':thresholds[np.argmax(sigma)]}
     cut_sample = {key:sample[key][X_loss>best_loss['loss']] for key in sample}
-    bump_hunter(cut_sample, sig_label=None, max_sigma=None, filename=output_dir+'/BH_best.png' , print_info=False)
+    bump_hunter(cut_sample, output_dir+'/BH_best.png', sig_label, print_info=False)
     sample_distributions([sample,cut_sample], sig_data, output_dir, 'BH_bkg_supp', bin_sizes={'m':2.5,'pt':10})
     return best_loss
 
