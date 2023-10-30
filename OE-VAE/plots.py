@@ -38,14 +38,14 @@ def plot_results(y_true, X_true, X_pred, sample, n_dims, model, metrics, loss_me
         #X_losses[loss_metric] = mass_deco(y_true, sample, X_losses[loss_metric], deco='pt')
         X_losses[loss_metric] = mass_deco(y_true, sample, X_losses[loss_metric], deco='2d')
     best_loss  = bump_scan(y_true, X_losses[loss_metric], loss_metric, sample, sig_data, output_dir)
-    #processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
-    #arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, loss_metric, output_dir)]
-    #processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
-    #arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir, best_loss) for metric in metrics]
-    #processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
+    processes  = [mp.Process(target=ROC_curves, args=(y_true, X_losses, sample['weights'], metrics, output_dir))]
+    arguments  = [(y_true, X_losses, sample['m'], sample['weights'], metrics, loss_metric, output_dir)]
+    processes += [mp.Process(target=mass_correlation, args=arg) for arg in arguments]
+    arguments  = [(y_true, X_losses[metric], sample['weights'], metric, output_dir, best_loss) for metric in metrics]
+    processes += [mp.Process(target=loss_distributions, args=arg) for arg in arguments]
     #processes += [mp.Process(target=tSNE, args=(y_true,  X_true, model, output_dir))]
-    #for job in processes: job.start()
-    #for job in processes: job.join()
+    for job in processes: job.start()
+    for job in processes: job.join()
     if apply_cuts == 'ON':
         generate_cuts(y_true, sample, X_losses[loss_metric], loss_metric, sig_data, output_dir)
     print()
