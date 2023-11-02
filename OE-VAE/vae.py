@@ -75,8 +75,8 @@ if args.constituents == 'ON'  and args.HLVs == 'ON' : input_dim = args.n_dims*ar
 if args.constituents == 'ON'  and args.HLVs == 'OFF': input_dim = args.n_dims*args.n_const
 if args.constituents == 'OFF' and args.HLVs == 'ON' : input_dim =                            len(HLV_list)
 sample_size  = len(list(h5py.File(get_file(bkg_data),'r').values())[0])
-args.n_train = [0                       , min(args.n_train, sample_size-args.n_valid)]
-args.n_valid = [sample_size-args.n_valid, sample_size                                ]
+args.n_train = [0                                             , min(args.n_train, sample_size-int(1e6))]
+args.n_valid = [max(args.n_train[-1],sample_size-args.n_valid), sample_size                            ]
 gen_cuts   =            ['(sample["m" ] >=   30)']
 train_cuts = gen_cuts + ['(sample["pt"] <= 5000)']
 valid_cuts = gen_cuts + ['(sample["pt"] <= 5000)']

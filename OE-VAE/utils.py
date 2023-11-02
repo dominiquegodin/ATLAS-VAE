@@ -515,12 +515,17 @@ def Gaussian(x, A, B, C):
     return A*np.exp(-(x-B)**2/(2*C**2))
 def fit_gaussian(bins, bin_sigma, bump_range=None):
     x_val, y_val = (bins[:-1]+bins[1:])/2, bin_sigma
-    if bump_range is None: selections = x_val != 0
-    else                 : selections = np.logical_and(x_val>=bump_range[0], x_val<=bump_range[1])
+    if bump_range is None:
+        selections = x_val != 0
+    else:
+        try   : selections = np.logical_and(x_val>=bump_range[0], x_val<=bump_range[1])
+        except: selections = np.full_like(x_val, True, dtype=bool)
     x_val, y_val = x_val[selections], y_val[selections]
     A_approx, B_approx, C_approx = np.max(y_val), x_val[np.argmax(y_val)], np.sqrt(np.var(x_val))
-    x_val, y_val = (x_val - B_approx)/C_approx, y_val/A_approx
-    height, mean, std = optimize.curve_fit(Gaussian, x_val, y_val)[0]
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        x_val, y_val = (x_val - B_approx)/C_approx, y_val/A_approx
+        height, mean, std = optimize.curve_fit(Gaussian, x_val, y_val)[0]
     return A_approx, B_approx, C_approx, height, mean, std
 
 

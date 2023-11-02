@@ -199,7 +199,15 @@ def train_model(vae, train_sample, valid_sample, OE_type='KLD', n_epochs=1, batc
                         end, flush = ('\r', False)  if condition and key == 'Train loss' else ('  ', True)
                         print(key + ' = ' + format(val,'4.3e'), end=end, flush=True)
         for valid_data in valid_sample:
-            valid_loss = get_losses(vae, valid_data, OE_type, beta, lamb, margin)[-1]
+            valid_batch_size = int(1e6)
+            valid_size       = len(valid_data[0]['weights'])
+            n_batches        = int(np.ceil(valid_size/valid_batch_size))
+            valid_loss = []
+            for batch_idx in range(n_batches):
+                idx  = batch_idx*valid_batch_size, min((batch_idx+1)*valid_batch_size, valid_size)
+                data = [{key:sample[key][idx[0]:idx[1]] for key in sample} for sample in valid_data]
+                valid_loss += [get_losses(vae, data, OE_type, beta, lamb, margin)[-1]]
+            valid_loss = np.concatenate(valid_loss)
             metric_valid(valid_loss)
         losses['Valid loss'] = metric_valid.result()
         print('Valid loss = ' + format(losses['Valid loss'],'4.3e'), end='  ', flush=True)
