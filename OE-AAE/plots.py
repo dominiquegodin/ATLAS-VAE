@@ -11,8 +11,6 @@ from utils      import n_constituents, jets_pt, get_idx, get_bins
 import matplotlib#; matplotlib.use('Agg')
 
 
-#def plot_results(y_true, X_true, X_pred, sample, n_dims, metrics, loss_metric, sig_data, output_dir,
-#                 apply_cuts, normal_loss, decorrelation, best_cut=None):
 def plot_results(valid_data, output_dir, apply_cuts, best_cut=None):
     def loss_mapping(x):
         if   np.all(np.logical_and(x >= 0, x <= 1)): return  x
@@ -22,45 +20,9 @@ def plot_results(valid_data, output_dir, apply_cuts, best_cut=None):
         else                                       : return (x/(np.abs(x)+1) + 1)/2
     print('PLOTTING PERFORMANCE RESULTS:')
 
-    #arguments = [(valid_data, output_dir, 'MAE', best_cut)]
-    #processes = [mp.Process(target=plot_discriminant, args=arg) for arg in arguments]
-    #for job in processes: job.start()
-    #for job in processes: job.join()
-    #sys.exit()
 
-    '''
-    manager = mp.Manager(); X_losses = manager.dict()
-    arguments = [(X_true, X_pred, n_dims, metric, X_losses) for metric in set(metrics)-set(['Inputs'])]
-    if 'Inputs' in metrics:
-        #array = np.concatenate([sample['m'][:,np.newaxis],sample['pt'][:,np.newaxis]], axis=1)
-        array = sample['m'][:,np.newaxis]
-        arguments += [(array, X_pred, n_dims, 'Inputs'       , X_losses)]
-        #arguments += [(X_true        , X_pred, n_dims, 'Inputs_scaled', X_losses)]
-    processes = [mp.Process(target=make_discriminant, args=arg) for arg in arguments]
-    for job in processes: job.start()
-    for job in processes: job.join()
-
-    print(sample.keys())
-    sys.exit()
-
-    #values = np.unique(X_losses[loss_metric])
-    #print(values)
-    #print(np.min(X_losses[loss_metric]), np.max(X_losses[loss_metric]))
-    #print(np.min(X_pred[:,0][y_true==0]), np.max(X_pred[:,0][y_true==0]))
-    #print(np.min(X_pred[:,0][y_true==1]), np.max(X_pred[:,0][y_true==1]))
-    #X_losses = {loss_metric:X_pred[:,1]}
-    #sys.exit()
-
-    if normal_loss == 'ON' or decorrelation in ['m','pt','2d']:
-        X_losses = {key:loss_mapping(val) for key,val in X_losses.items()}
-    if decorrelation in ['m','pt','2d']:
-        #X_losses[loss_metric] = mass_deco_1D(y_true, sample['m' ], X_losses[loss_metric])
-        #X_losses[loss_metric] = mass_deco_1D(y_true, sample['pt'], X_losses[loss_metric])
-        X_losses[loss_metric] = bin_deco(y_true, sample, X_losses[loss_metric], deco=decorrelation)
-    '''
-
-    data = valid_data['2HDM_500GeV']
-    #data = valid_data['top-Geneva']
+    #data = valid_data['2HDM_500GeV']
+    data = valid_data['top-Geneva']
     #data = valid_data['VZ-Geneva']
     sample = data['sample']
     y_true = data['y_true']
@@ -73,8 +35,8 @@ def plot_results(valid_data, output_dir, apply_cuts, best_cut=None):
 
     metrics = ['MAE']
     loss_metric = 'MAE'
-    sig_data = '2HDM_500GeV'
-    #sig_data = 'top-Geneva'
+    #sig_data = '2HDM_500GeV'
+    sig_data = 'top-Geneva'
     if   'top'  in sig_data: sig_label = 'Top'
     elif 'VZ'   in sig_data: sig_label = 'VZ'
     elif 'BSM'  in sig_data: sig_label = 'BSM'
@@ -1296,7 +1258,6 @@ def deco_example(output_dir):
             plt.legend(handles=new_handles, loc='upper right', labels=labels,
                        fontsize=22, facecolor='ghostwhite', frameon=False, ncol=1)
 
-
         if plot_number == 'distributions':
             x = np.linspace(0, 1.07, int(1e5)+1)
             func_bkg = Maxwell_pdf(x, a=0.16)
@@ -1363,20 +1324,18 @@ def deco_example(output_dir):
             plt.legend(handles=new_handles, loc='upper right', labels=labels,
                        fontsize=22, facecolor='ghostwhite', frameon=False, bbox_to_anchor=(1,0.95))
 
-
         if plot_number == 'ROC_curve':
             x = np.linspace(0, 1, int(1e5)+1)
             e_bkg = Maxwell_cdf(1, a=0.16) - Maxwell_cdf(x, a=0.16)
             e_sig = -poly_cdf(0, coeff=polynom_coeff()) + poly_cdf(1-x, coeff=polynom_coeff())
             plt.plot(e_sig, 1-e_bkg, color='gray', lw=4, zorder=1, clip_on=False,
                      label='AUC$=$'+format(-np.trapz(1-e_bkg,e_sig),'.2f'))
-            #plt.plot(e_sig[e_bkg!=0], 1/e_bkg[e_bkg!=0], color='darkgray', lw=4, zorder=1, clip_on=False)
+            #plt.plot(e_sig[e_bkg!=0], e_sig[e_bkg!=0]/e_bkg[e_bkg!=0], color='darkgray', lw=4, zorder=1, clip_on=False)
             plt.xlim([0,1])
             plt.ylim([0,1])
             plt.xticks([0,1], labels=[0,1])
             plt.yticks([0,1], labels=[0,1])
             plot_arrows(fig, axes)
-
             r_sig = 0.5
             accuracy = e_sig*r_sig + (1-e_bkg)*(1-r_sig)
             best_idx = np.argmax(accuracy)
@@ -1390,6 +1349,26 @@ def deco_example(output_dir):
             plt.legend(loc='upper left', fontsize=22, facecolor='ghostwhite',
                        frameon=False, bbox_to_anchor=(0,0.95))
 
+        if plot_number == 'gain_curve':
+            x = np.linspace(0, 1, int(1e5)+1)
+            e_bkg = Maxwell_cdf(1, a=0.16) - Maxwell_cdf(x, a=0.16)
+            e_sig = -poly_cdf(0, coeff=polynom_coeff()) + poly_cdf(1-x, coeff=polynom_coeff())
+            #plt.plot(e_sig[e_bkg!=0], 1/e_bkg[e_bkg!=0], color='darkgray', lw=4, zorder=1, clip_on=False)
+            plt.plot(e_sig[e_bkg!=0], e_sig[e_bkg!=0]/e_bkg[e_bkg!=0], color='darkgray', lw=4, zorder=1, clip_on=False)
+            #print( e_sig[e_bkg!=0][np.argmax(e_sig[e_bkg!=0]/e_bkg[e_bkg!=0])] )
+            plt.xlim([0,1])
+            plt.ylim([0,3e5])
+            #plt.ylim([0,1e7])
+            plt.xticks([0,1], labels=[0,1])
+            plt.yticks([0,1e5,2e5,3e5], rotation=0, labels=[0,'1e5','2e5','3e5'])
+            plot_arrows(fig, axes)
+            plt.text(1.1, -0.01, '$ϵ_{\operatorname{sig}}$', {'color':'black', 'fontsize':38},
+                     va='center', ha='left', transform=axes.transAxes, zorder=20)
+            #plt.text(0.0, 1.184, '$G_{S/B}/10^5$',
+            #         {'color':'black', 'fontsize':36}, va='center', ha='center', transform=axes.transAxes, zorder=20)
+            plt.text(0.0, 1.185, '$G_{\operatorname{s/b}}$',
+                     {'color':'black', 'fontsize':38}, va='center', ha='center', transform=axes.transAxes, zorder=20)
+            axes.tick_params(axis='y', pad=4, labelsize=30)
 
         if plot_number == '0':
             x = np.linspace(0, 1.07, int(1e5)+1)
@@ -1430,7 +1409,7 @@ def deco_example(output_dir):
             plt.plot(x, f_sig(x), color=colors['sig'], lw=4, label='Signal', zorder=1)
             plt.fill_between(x, f_bkg(x), y2=0, alpha=0.1, color=colors['bkg'])
             plt.fill_between(x, f_sig(x), y2=0, alpha=0.1, color=colors['sig'])
-            if plot_number == '1a':
+            if plot_number == '1a' and False:
                 x_bin = np.linspace(0.28, 0.32, 100)
                 plt.fill_between(x_bin, f_bkg(x_bin), y2=0, alpha=0.25, color=colors['bkg'])
                 plt.fill_between(x_bin, f_bkg(x_bin), facecolor="none", hatch=None, edgecolor=colors['bkg'],
@@ -1469,7 +1448,25 @@ def deco_example(output_dir):
                          va='center', ha='center', transform=axes.transAxes, zorder=20)
                 plt.text(-0.035, 0.45, '$\Delta$$F$', {'color':'black', 'fontsize':26},
                          va='center', ha='center', transform=axes.transAxes, zorder=20)
+                #plt.text(0.3, -0.05, '$'+disc_symbol+'$', {'color':'black', 'fontsize':26},
+                #         va='center', ha='center', transform=axes.transAxes, zorder=20)
+                #plt.text(-0.025, 0.45, '$F$', {'color':'black', 'fontsize':26},
+                #         va='center', ha='center', transform=axes.transAxes, zorder=20)
                 plt.text(0.79, 0.76, '$F('+disc_symbol+')$$={\int}^{\!'+disc_symbol+'}_{\!\!0}$$\!f(x)dx$',
+                         {'color':'black', 'fontsize':28},
+                         va='center', ha='center', transform=axes.transAxes, zorder=20)
+                axes.arrow(0.3,0,0,F_bkg(0.3), lw=2, ls='-', fc='k', ec='k',
+                           head_width=0.01, head_length=0.03, overhang=0.,
+                           length_includes_head=True, clip_on=False, zorder=30)
+                axes.arrow(0.3,F_bkg(0.3),-0.3,0, lw=2, ls='-', fc='k', ec='k',
+                           head_width=0.015, head_length=0.02, overhang=0.,
+                           length_includes_head=True, clip_on=False, zorder=30)
+            if plot_number == '2b':
+                plt.text(0.3, -0.05, '$'+disc_symbol+'$', {'color':'black', 'fontsize':26},
+                         va='center', ha='center', transform=axes.transAxes, zorder=20)
+                plt.text(-0.025, 0.41, '$F$', {'color':'black', 'fontsize':26},
+                         va='center', ha='center', transform=axes.transAxes, zorder=20)
+                plt.text(0.79, 0.90, '$F('+disc_symbol+')$$={\int}^{\!'+disc_symbol+'}_{\!\!0}$$\!f(x)dx$',
                          {'color':'black', 'fontsize':28},
                          va='center', ha='center', transform=axes.transAxes, zorder=20)
                 axes.arrow(0.3,0,0,F_bkg(0.3), lw=2, ls='-', fc='k', ec='k',
@@ -1489,7 +1486,7 @@ def deco_example(output_dir):
             axes.axhline(1, xmin=0, xmax=1, ls=':', linewidth=2, color='tab:gray', clip_on=False)
             plt.legend(loc='upper left', fontsize=22, facecolor='ghostwhite', frameon=False)
         if plot_number == '1c' or plot_number == '2c':
-            plt.plot((new_x[:-1]+new_x[1:])/2, hist_bkg/np.diff(new_x),
+            plt.plot((new_x[:-1]+new_x[1:])/2, hist_bkg/np.diff(new_x) + (1 if plot_number == '2c' else 0),
                      color=colors['bkg'], lw=4, label='Background', clip_on=False, zorder=2)
             plt.plot(np.append((new_x[:-1]+new_x[1:])/2,[1]), np.append(hist_sig/np.diff(new_x),0),
                      color=colors['sig'], lw=4, label='Signal'    , clip_on=False, zorder=1)
@@ -1561,11 +1558,13 @@ def deco_example(output_dir):
             if plot_number == '2d':
                 plt.ylim([0,0.3])
                 plt.yticks([0,0.1,0.2,0.3], labels=[0,0.1,0.2,0.3])
-            axes.tick_params(axis="x", pad=3, labelsize=28)
+            axes.tick_params(axis="x", pad=1, labelsize=28)
             plot_arrows(fig, axes, x_origin=x_min)
-            plt.text(1.1, 0, '$t(F)$', {'color':'black', 'fontsize':42},
+            #x_label, y_label = '$t(F)$', '$g(t)$'
+            x_label, y_label = '$F$', '$g(t)$'
+            plt.text(1.1, 0, x_label, {'color':'black', 'fontsize':42},
                      va='center', ha='left', transform=axes.transAxes, zorder=20)
-            plt.text(0, 1.18, '$g(t)$', {'color':'black', 'fontsize':42},
+            plt.text(0, 1.18, y_label, {'color':'black', 'fontsize':42},
                      va='center', ha='center', transform=axes.transAxes, zorder=20)
             cut = best_significance(np.cumsum(hist_bkg), np.cumsum(hist_sig), new_x[1:])['best_cut']
             idx = np.argmin(np.abs(cut-(new_x[:-1]+new_x[1:])/2))
@@ -1573,7 +1572,7 @@ def deco_example(output_dir):
             axes.axvline(cut, ymin=0, ymax=ymax, ls='--', linewidth=2, color='tab:gray')
             hist_bkg_max = np.max(hist_bkg/np.diff(new_x))
             axes.axhline(hist_bkg_max, xmin=0, xmax=(-x_min)/(x_max-x_min),
-                         ls='--', linewidth=2, color='tab:gray')
+                         ls=':', linewidth=2, color='tab:gray')
             plt.text(-0.015, hist_bkg_max/axes.get_ylim()[1], r'$\frac{1}{4}$',
                      {'color':'black', 'fontsize':26},
                      va='center', ha='right', transform=axes.transAxes, zorder=20)
@@ -1586,6 +1585,7 @@ def deco_example(output_dir):
                        fontsize=22, facecolor='ghostwhite', frameon=False, bbox_to_anchor=(0, 1.05))
         #fig.subplots_adjust(left=0.06, top=0.83, bottom=0.10, right=0.84)
         fig.subplots_adjust(left=0.08, top=0.83, bottom=0.11, right=0.84)
+        #fig.subplots_adjust(left=0.12, top=0.83, bottom=0.11, right=0.84)
         file_name = output_dir+'/'+'deco_'+str(plot_number)+'.png'
         print('Printing:', file_name)
         plt.savefig(file_name); plt.close()
@@ -1626,9 +1626,10 @@ def deco_example(output_dir):
     #deco_plots(x=None, new_x=None, hist_bkg=None, hist_sig=None, plot_number='AUC')
     #deco_plots(x=None, new_x=None, hist_bkg=None, hist_sig=None, plot_number='uncut')
     #deco_plots(x=None, new_x=None, hist_bkg=None, hist_sig=None, plot_number='cut')
-    deco_plots(x=None, new_x=None, hist_bkg=None, hist_sig=None, plot_number='distributions')
+    #deco_plots(x=None, new_x=None, hist_bkg=None, hist_sig=None, plot_number='distributions')
     #deco_plots(x=None, new_x=None, hist_bkg=None, hist_sig=None, plot_number='ROC_curve')
-    sys.exit()
+    #deco_plots(x=None, new_x=None, hist_bkg=None, hist_sig=None, plot_number='gain_curve')
+    #sys.exit()
 
     f_bkg = partial(poly_pdf, coeff=polynom_coeff())
     F_bkg = partial(poly_cdf, coeff=polynom_coeff())
@@ -1637,6 +1638,8 @@ def deco_example(output_dir):
     x, new_x, hist_bkg, hist_sig = get_hist()
     for plot_number in ['0','1a','1b','1c']: deco_plots(x, new_x, hist_bkg, hist_sig, plot_number)
     deco_plots(x=None, new_x=None, hist_bkg=None, hist_sig=None, plot_number='1d', base=np.e)
+    sys.exit()
+
     f_bkg = partial(Maxwell_pdf    , a=0.215)
     F_bkg = partial(Maxwell_cdf    , a=0.215)
     f_sig = partial(Maxwell_inv_pdf, a=0.12)

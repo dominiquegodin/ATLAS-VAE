@@ -38,8 +38,6 @@ def get_file(data_type, host_name='atlas'):
     return data_path + '/' + data_files[data_type]
 
 
-#def get_data(model, bkg_data, sig_data, n_bkg, n_sig, cuts, n_const, n_dims,
-#             constituents, HLVs, HLV_list, const_scaler, HLV_scaler, normal_loss, deco):
 def get_data(Autoencoder, Discriminator, bkg_data, sig_data, n_bkg, n_sig, cuts, n_const, n_dims,
              constituents, HLVs, HLV_list, const_scaler, HLV_scaler, normal_loss, deco):
     def loss_mapping(x):
