@@ -8,7 +8,7 @@
 ##SBATCH --mem=64G               #memory per node (Beluga)
 ##SBATCH --cpus-per-task=4       #CPUs threads per node (Beluga)
 #SBATCH --gres=gpu:1            #GPUs per node
-#SBATCH --job-name=OE_VAE
+#SBATCH --job-name=OE_AAE
 #SBATCH --output=%x_%A_%a.out
 #SBATCH --array=0
 #---------------------------------------------------------------------
@@ -26,13 +26,13 @@ then
 	PATHS=/lcg,/opt
     fi
     SIF=/opt/tmp/godin/sing_images/tf-2.1.0-gpu-py3_sing-2.6.sif
-    singularity shell --nv --bind $PATHS $SIF vae.sh $SLURM_ID $HOST_NAME
+    singularity shell --nv --bind $PATHS $SIF train.sh $SLURM_ID $HOST_NAME
 else
     # TRAINING ON BELUGA
     module load singularity/3.7
     PATHS=/project/def-arguinj
     SIF=/project/def-arguinj/shared/sing_images/tf-2.1.0-gpu-py3_sing-2.6.sif
-    singularity shell --nv --bind $PATHS $SIF < vae.sh $SLURM_ID $HOST_NAME
+    singularity shell --nv --bind $PATHS $SIF < train.sh $SLURM_ID $HOST_NAME
 fi
 
 mkdir -p outputs/log_files

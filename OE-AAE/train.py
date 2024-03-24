@@ -61,8 +61,6 @@ args.const_scaler_out = args.output_dir+'/'+args.const_scaler_out
 args.HLV_scaler_in    = args.output_dir+'/'+args.HLV_scaler_in
 args.HLV_scaler_out   = args.output_dir+'/'+args.HLV_scaler_out
 args.hist_file        = args.output_dir+'/'+args.hist_file
-args.output_dir       = args.output_dir+'/'+'plots'
-Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 #from plots import deco_example
 #deco_example(args.output_dir) ; sys.exit()
 
@@ -77,7 +75,7 @@ if args.constituents == 'OFF' and args.HLVs == 'ON' : input_size =              
 bkg_size  = len(list(h5py.File(get_file(bkg_data),'r').values())[0])
 OoD_size  = len(list(h5py.File(get_file(OoD_data),'r').values())[0])
 args.n_train = [0, min(args.n_train, max(int(1e6), bkg_size-args.n_valid))]
-args.n_valid = [max(args.n_train[1],bkg_size-args.n_valid), bkg_size   ]
+args.n_valid = [max(args.n_train[1],bkg_size-args.n_valid), bkg_size      ]
 args.n_OoD   = min(OoD_size, args.n_OoD)
 gen_cuts   =            ['(sample["m" ] >=   20)']
 train_cuts = gen_cuts + ['(sample["pt"] <= 5000)']
@@ -92,7 +90,7 @@ print('\nPROGRAM ARGUMENTS:\n'+tabulate(vars(args).items(), tablefmt='psql'))
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' #Suppressing Tensorflow infos and warnings
 model = create_model(input_size, args.layers_sizes)
 multithread = True ; const_scaler = None ; HLV_scaler = None
-if args.model_in != args.output_dir[0:args.output_dir.rfind('/')]+'/':
+if args.model_in != args.output_dir+'/':
     if not os.path.isfile(args.model_in): sys.exit()
     print('\nLoading pre-trained weights from: ' + args.model_in)
     sys.stdout = open(os.devnull, 'w') #Stopping screen output
@@ -135,34 +133,28 @@ if args.n_epochs > 0:
                                    args.weight_type, train_cuts, multithread, args.constituents, args.HLVs,
                                    HLV_list, bin_sizes, HLV_scaler, const_scaler, args.output_dir)
     train_AAE(model, train_sample, args.n_epochs, args.batch_size, args.output_dir, args.model_out)
-    #_, _, AAE = model ; AAE.load_weights(args.model_out)
 if args. plotting == 'OFF' and args.apply_cuts == 'OFF': sys.exit()
 
 
-#Autoencoder, Discriminator, AAE = model
-#Autoencoder  .load_weights(args.output_dir[0:args.output_dir.rfind('/')]+'/'+'autoencodeur.h5')
-#Discriminator.load_weights(args.output_dir[0:args.output_dir.rfind('/')]+'/'+'discriminator.h5')
-_, _, AAE = model
-AAE.load_weights(args.output_dir[0:args.output_dir.rfind('/')]+'/'+'AAE.h5')
-Autoencoder   = AAE.get_layer(name='AUTOENCODER')
-Discriminator = AAE.get_layer(name='DISCRIMINATOR')
-#print('\n'); Autoencoder.summary()
-#Discriminator.trainable = True
-#print('\n'); Discriminator.summary()
-#sys.exit()
-
-
-# MODEL PREDICTIONS ON VALIDATION SAMPLE
+# LOADING MODEL WEIGHTS AND VALIDATION
 print('\n+'+36*'-'+'+\n+--- VALIDATION SAMPLE EVALUATION ---+\n+'+36*'-'+'+\n')
-valid_data = {sig_data:get_data(Autoencoder, Discriminator, bkg_data, sig_data, args.n_valid, args.n_sig, valid_cuts,
-                                args.n_const, args.n_dims, args.constituents, args.HLVs, HLV_list,
-                                const_scaler, HLV_scaler, args.normal_loss, args.decorrelation)
-              for sig_data in ['2HDM_500GeV']}
-              #for sig_data in ['top-Geneva']}
-              #for sig_data in ['VZ-Geneva']}
+_, _, AAE = model
+AAE.load_weights(args.output_dir+'/'+'AAE.h5')
+Autoencoder   = AAE.get_layer(name='AUTOENCODER'  )
+Discriminator = AAE.get_layer(name='DISCRIMINATOR')
 
 
 # PLOTTING PERFORMANCE RESULTS
 if args.plotting == 'ON':
     if os.path.isfile(args.hist_file): plot_history(args.hist_file, args.output_dir)
-    plot_results(valid_data, args.output_dir, args.apply_cuts)
+    #sig_list = ['2HDM_200GeV']
+    sig_list = ['2HDM_500GeV']
+    #sig_list = ['top-Geneva' ]
+    #sig_list = ['VZ_500GeV'  ]
+    for sig_data in sig_list:
+        output_dir = args.output_dir+'/'+sig_data
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        valid_data = get_data(Autoencoder, Discriminator, bkg_data, sig_data, args.n_valid, args.n_sig,
+                              valid_cuts, args.n_const, args.n_dims, args.constituents, args.HLVs, HLV_list,
+                              const_scaler, HLV_scaler, args.normal_loss, args.decorrelation, output_dir)
+        plot_results(valid_data, sig_data, output_dir, args.apply_cuts)

@@ -68,30 +68,29 @@ def discriminator_model(input_size, layers_sizes, activation, kernel, batchNorm,
     return discriminator
 
 
-def get_OoD_loss(loss_bkg, loss_OoD):
+def OoD_loss(loss_bkg, loss_OoD):
     def get_loss(y_true, y_pred):
         return tf.keras.activations.sigmoid(loss_bkg - loss_OoD)
     return get_loss
 
 
-def create_model(input_size, autoencoder_layers, activation='relu', kernel='glorot_uniform', beta=5, epsilon=1):
+def create_model(input_size, autoencoder_layers, activation='relu', kernel='glorot_uniform', lamb=1, beta=1):
     #optimizer = optimizers.RMSprop(learning_rate=1e-4)
     optimizer = optimizers.Adam(lr=1e-6, amsgrad=False)
-    #discriminator_loss = 'binary_crossentropy'             ; discriminator_layers = [100,100,1]
     discriminator_loss = 'sparse_categorical_crossentropy' ; discriminator_layers = [100,100,3]
 
-    # AUTOENCODER
+    # AE
     Autoencoder = autoencoder_model(input_size, autoencoder_layers, activation, kernel, batchNorm=False)
-    AE_inputs_bkg  = layers.Input(shape=input_size)
-    AE_inputs_OoD  = layers.Input(shape=input_size)
-    AE_outputs_bkg = Autoencoder(AE_inputs_bkg)
-    AE_outputs_OoD = Autoencoder(AE_inputs_OoD)
-    AE = models.Model([AE_inputs_bkg, AE_inputs_OoD], [AE_outputs_bkg, AE_outputs_OoD], name='AE')
-    loss_bkg = MAE_dist(AE_inputs_bkg, AE_outputs_bkg)
-    loss_OoD = MAE_dist(AE_inputs_OoD, AE_outputs_OoD)
-    OoD_loss = get_OoD_loss(loss_bkg, loss_OoD)
-    AE.compile(loss=['mean_absolute_error', OoD_loss], loss_weights=[1,beta], experimental_run_tf_function=False,
-               optimizer=optimizer, weighted_metrics=[['mean_absolute_error'],['mean_absolute_error']])
+    AE_bkg_inputs  = layers.Input(shape=input_size)
+    AE_OoD_inputs  = layers.Input(shape=input_size)
+    AE_bkg_outputs = Autoencoder(AE_bkg_inputs)
+    AE_OoD_outputs = Autoencoder(AE_OoD_inputs)
+    AE = models.Model([AE_bkg_inputs, AE_OoD_inputs], [AE_bkg_outputs, AE_OoD_outputs], name='AE')
+    AE_bkg_MAE = MAE_dist(AE_bkg_inputs, AE_bkg_outputs)
+    AE_OoD_MAE = MAE_dist(AE_OoD_inputs, AE_OoD_outputs)
+    AE.compile(loss=['mean_absolute_error', OoD_loss(AE_bkg_MAE,AE_OoD_MAE)],
+               loss_weights=[1,lamb], optimizer=optimizer, experimental_run_tf_function=False,
+               weighted_metrics=[['mean_absolute_error'],['mean_absolute_error']])
     print('\n'); AE.summary()
 
     # DISCRIMINATOR
@@ -101,35 +100,44 @@ def create_model(input_size, autoencoder_layers, activation='relu', kernel='glor
 
     # AAE
     Discriminator.trainable = False
-    AE_inputs  = layers.Input(shape=input_size)
-    AE_outputs = Autoencoder  (AE_inputs )
-    D_outputs  = Discriminator(AE_outputs)
-    AAE = models.Model(AE_inputs, [AE_outputs, D_outputs], name='AAE')
-    AAE.compile(loss=['mean_absolute_error', discriminator_loss], loss_weights=[1,epsilon],
-                optimizer=optimizer, weighted_metrics=[['mean_absolute_error'],['accuracy']])
+    AAE_bkg_inputs        = layers.Input(shape=input_size)
+    AAE_OoD_inputs        = layers.Input(shape=input_size)
+    AAE_all_inputs        = layers.Input(shape=input_size)
+    AAE_bkg_outputs       = Autoencoder  (AAE_bkg_inputs )
+    AAE_OoD_outputs       = Autoencoder  (AAE_OoD_inputs )
+    AAE_all_outputs       = Autoencoder  (AAE_all_inputs )
+    discriminator_outputs = Discriminator(AAE_all_outputs)
+    AAE_bkg_MAE = MAE_dist(AAE_bkg_inputs, AAE_bkg_outputs)
+    AAE_OoD_MAE = MAE_dist(AAE_OoD_inputs, AAE_OoD_outputs)
+    AAE = models.Model([AAE_bkg_inputs , AAE_OoD_inputs , AAE_all_inputs        ],
+                       [AAE_bkg_outputs, AAE_OoD_outputs, discriminator_outputs ], name='AAE')
+    AAE.compile(loss=['mean_absolute_error', OoD_loss(AAE_bkg_MAE,AAE_OoD_MAE), discriminator_loss],
+                loss_weights=[1,lamb,beta], optimizer=optimizer, experimental_run_tf_function=False,
+                weighted_metrics=[['mean_absolute_error'],['mean_absolute_error'],['accuracy']])
     print('\n'); AAE.summary()
 
     return AE, Discriminator, AAE
 
 
-def train_AAE(model, train_generator, n_cycles, batch_size, output_dir, model_out, AE_pretrained='', epsilon=1):
-    epoch_dict = {'AE':np.full(n_cycles,5), 'Discriminator':np.full(n_cycles,5), 'AAE':np.full(n_cycles,5)}
-    epoch_dict['AE'][0] = 10 ; epoch_dict['Discriminator'][0] = 0 ; epoch_dict['AAE'][0] = 0
+def train_AAE(model, train_generator, n_cycles, batch_size, output_dir, model_out,
+              AE_pretrained='', lamb=1, beta=1):
+    epoch_dict = {'AE':np.full(n_cycles,5), 'Disc':np.full(n_cycles,10), 'AAE':np.full(n_cycles,5)}
+    epoch_dict['AE'][0] = 10 ; epoch_dict['Disc'][0] = 10 ; epoch_dict['AAE'][0] = 5
 
     AE, Discriminator, AAE = model
+    #AE            = AAE.get_layer(name='AUTOENCODER'  )
+    #Discriminator = AAE.get_layer(name='DISCRIMINATOR')
     sample = train_generator[0]
-    bkg_data, bkg_weights = sample['bkg']['HLVs'], sample['bkg']['weights']
-    OoD_data, OoD_weights = sample['OoD']['HLVs'], sample['OoD']['weights']
-    #bkg_data, bkg_weights = sample['bkg']['constituents'], sample['bkg']['weights']
-    #OoD_data, OoD_weights = sample['OoD']['constituents'], sample['OoD']['weights']
-    n_batches = int(np.ceil(len(bkg_data)/batch_size))
+    bkg_sample, bkg_weight = sample['bkg']['HLVs'], sample['bkg']['weights']
+    OoD_sample, OoD_weight = sample['OoD']['HLVs'], sample['OoD']['weights']
+    #bkg_sample, bkg_weight = sample['bkg']['constituents'], sample['bkg']['weights']
+    #OoD_sample, OoD_weight = sample['OoD']['constituents'], sample['OoD']['weights']
+    n_batches = int(np.ceil(len(bkg_sample)/batch_size))
     epoch_counter = 0
-    loss_history = {'AAE Loss'          :[], 'AE Loss'               :[],
-                    'MAE Loss'          :[], 'OoD Loss'              :[],
-                    'Discriminator Loss':[], 'Discriminator Accuracy':[]}
-
+    loss_history = {'AE Loss'      :[], 'OoD Loss'  :[], 'Disc Loss':[],
+                    'Disc Accuracy':[], 'Total Loss':[], 'AAE Loss' :[]}
     output_dir = output_dir[0:output_dir.rfind('/')]
-    AE_pretrained = output_dir+'/'+AE_pretrained
+    AE_pretrained = output_dir if AE_pretrained=='' else output_dir+'/'+AE_pretrained
     if os.path.isfile(AE_pretrained):
         print('\nLoading pre-trained AE file from:', AE_pretrained)
         AE.load_weights(AE_pretrained)
@@ -142,90 +150,66 @@ def train_AAE(model, train_generator, n_cycles, batch_size, output_dir, model_ou
         print('\n*** CYCLE %d/%d ***'%(cycle+1,n_cycles))
         n_epochs = epoch_dict['AE'][cycle]
         if n_epochs != 0: print('training autoencoder'.upper())
-        else            : continue
+        #else            : continue
         start_time = time.time()
         for epoch in range(n_epochs):
             print('Epoch %d/%d:'%(epoch+1, n_epochs))
             idx_batch = utils.shuffle(np.arange(n_batches), random_state=None)
             for n in range(len(idx_batch)):
-                idx_data = idx_batch[n]*batch_size, min((idx_batch[n]+1)*batch_size, len(bkg_data))
-                bkg_batch_sample  = utils.shuffle(bkg_data   [idx_data[0]:idx_data[1]], random_state=0)
-                OoD_batch_sample  = utils.shuffle(OoD_data   [idx_data[0]:idx_data[1]], random_state=0)
-                bkg_batch_weights = utils.shuffle(bkg_weights[idx_data[0]:idx_data[1]], random_state=0)
-                OoD_batch_weights = utils.shuffle(OoD_weights[idx_data[0]:idx_data[1]], random_state=0)
+                idx_data = idx_batch[n]*batch_size, min((idx_batch[n]+1)*batch_size, len(bkg_sample))
+                bkg_batch_sample = utils.shuffle(bkg_sample[idx_data[0]:idx_data[1]], random_state=0)
+                bkg_batch_weight = utils.shuffle(bkg_weight[idx_data[0]:idx_data[1]], random_state=0)
+                OoD_batch_sample = utils.shuffle(OoD_sample[idx_data[0]:idx_data[1]], random_state=0)
+                OoD_batch_weight = utils.shuffle(OoD_weight[idx_data[0]:idx_data[1]], random_state=0)
                 #autoencoder_loss = losses.MeanAbsoluteError()(batch_sample, AE(batch_sample))
                 #autoencoder_loss = np.mean(MAE_dist(batch_sample, AE(batch_sample)))
-                AE_hist = AE.train_on_batch([bkg_batch_sample , OoD_batch_sample ],
-                                            [bkg_batch_sample , OoD_batch_sample ],
-                                            [bkg_batch_weights, OoD_batch_weights])
+                AE_hist = AE.train_on_batch([bkg_batch_sample, OoD_batch_sample],
+                                            [bkg_batch_sample, OoD_batch_sample],
+                                            [bkg_batch_weight, OoD_batch_weight])
                 #print(AE.metrics_names); print(AE_hist); sys.exit()
-                loss_dict = {'AE Loss':AE_hist[0], 'MAE Loss':AE_hist[1], 'OoD Loss':AE_hist[2]}
+                loss_dict = {'AE Loss':AE_hist[1], 'OoD Loss':AE_hist[2], 'Total Loss':AE_hist[0]}
                 print_batch(n, n_batches, loss_dict)
             print('(', '\b' + format(time.time() - start_time, '.1f'), '\b' + 's)')
             if epoch+1 != n_epochs: print(3*'\033[A')
             epoch_counter += 1
             for key in loss_dict: loss_history[key] += [(cycle+1, epoch_counter, loss_dict[key])]
-        if cycle == 0 and not os.path.isfile(AE_pretrained):
+        if cycle == 0 and n_epochs != 0 and not os.path.isfile(AE_pretrained):
             if AE_hist[0] < 100:
-                print('\nSaving pre-trained AE file to:', AE_pretrained)
+                print('Saving pre-trained AE file to:', AE_pretrained)
                 AE.save_weights(output_dir+'/'+'AE_pretrained.h5')
             else: sys.exit()
         #for key,val in loss_history.items(): print(key, val)
         #sys.exit()
 
         # DISCRIMINATOR TRAINING
-        n_epochs = epoch_dict['Discriminator'][cycle]
+        n_epochs = epoch_dict['Disc'][cycle]
         if n_epochs != 0: print('training discriminator'.upper())
-        else            : continue
+        #else            : continue
         start_time = time.time()
         Discriminator.trainable = True
         for epoch in range(n_epochs):
             print('Epoch %d/%d:'%(epoch+1, n_epochs))
             idx_batch = utils.shuffle(np.arange(n_batches), random_state=None)
             for n in range(len(idx_batch)):
-                '''
-                idx_data = idx_batch[n]*batch_size, min((idx_batch[n]+1)*batch_size, len(bkg_data))
-                if False:
-                    #rng      = np.random.default_rng()
-                    #idx_real = rng.choice(np.arange(idx_data[0],idx_data[1]), np.diff(idx_data)//2, replace=False)
-                    #idx_fake = list(set(np.arange(idx_data[0],idx_data[1])) - set(idx_real))
-                    idx_real = utils.shuffle(np.arange(idx_data[0],idx_data[1]), random_state=None)
-                    idx_fake = utils.shuffle(np.arange(idx_data[0],idx_data[1]), random_state=None)
-                else:
-                    idx_real = np.arange(idx_data[0],idx_data[1])
-                    idx_fake = np.arange(idx_data[0],idx_data[1])
-                data_real     =     np.take(bkg_data   , idx_real, axis=0)
-                data_fake, _  = AE([np.take(bkg_data   , idx_fake, axis=0), np.take(OoD_data, idx_fake, axis=0)])
-                weights_real  =     np.take(bkg_weights, idx_real, axis=0)
-                weights_fake  =     np.take(bkg_weights, idx_fake, axis=0)
-                batch_sample  = np.concatenate([   data_real,    data_fake], axis=0)
-                batch_weights = np.concatenate([weights_real, weights_fake], axis=0)
-                batch_labels  = np.concatenate([np.ones_like(weights_real), np.zeros_like(weights_fake)])
-                batch_sample  = utils.shuffle(batch_sample , random_state=0)
-                batch_weights = utils.shuffle(batch_weights, random_state=0)
-                batch_labels  = utils.shuffle(batch_labels , random_state=0)
-                Discriminator_hist = Discriminator.train_on_batch(batch_sample, batch_labels,
-                                                                  batch_weights, reset_metrics=True)
-                '''
-                idx_data = idx_batch[n]*batch_size, min((idx_batch[n]+1)*batch_size, len(bkg_data))
-                bkg_batch_sample  = utils.shuffle(bkg_data   [idx_data[0]:idx_data[1]], random_state=0)
-                bkg_batch_fake, _ = AE([bkg_batch_sample, OoD_batch_sample])
-                OoD_batch_sample  = utils.shuffle(OoD_data   [idx_data[0]:idx_data[1]], random_state=0)
-                bkg_batch_weights = utils.shuffle(bkg_weights[idx_data[0]:idx_data[1]], random_state=0)
-                OoD_batch_weights = utils.shuffle(OoD_weights[idx_data[0]:idx_data[1]], random_state=0)
-                batch_sample  = np.concatenate([bkg_batch_sample , bkg_batch_fake   , OoD_batch_sample ], axis=0)
-                batch_weights = np.concatenate([bkg_batch_weights, bkg_batch_weights, OoD_batch_weights], axis=0)
-                batch_labels  = np.concatenate([np.full_like(bkg_batch_weights, 0),
-                                                np.full_like(bkg_batch_weights, 1),
-                                                np.full_like(OoD_batch_weights, 2)])
-                batch_sample  = utils.shuffle(batch_sample , random_state=0)
-                batch_labels  = utils.shuffle(batch_labels , random_state=0)
-                batch_weights = utils.shuffle(batch_weights, random_state=0)
-                Discriminator_hist = Discriminator.train_on_batch(batch_sample, batch_labels, batch_weights,
+                idx_data = idx_batch[n]*batch_size, min((idx_batch[n]+1)*batch_size, len(bkg_sample))
+                bkg_batch_sample  = utils.shuffle(bkg_sample[idx_data[0]:idx_data[1]], random_state=0)
+                bkg_batch_weight  = utils.shuffle(bkg_weight[idx_data[0]:idx_data[1]], random_state=0)
+                OoD_batch_sample  = utils.shuffle(OoD_sample[idx_data[0]:idx_data[1]], random_state=0)
+                OoD_batch_weight  = utils.shuffle(OoD_weight[idx_data[0]:idx_data[1]], random_state=0)
+                #bkg_batch_fake, _ = AE([bkg_batch_sample, OoD_batch_sample])
+                bkg_batch_fake    = AE([bkg_batch_sample, OoD_batch_sample])[0]
+                batch_sample = np.concatenate([bkg_batch_sample, bkg_batch_fake  , OoD_batch_sample], axis=0)
+                batch_weight = np.concatenate([bkg_batch_weight, bkg_batch_weight, OoD_batch_weight], axis=0)
+                batch_labels = np.concatenate([np.full_like(bkg_batch_weight, 0),
+                                               np.full_like(bkg_batch_weight, 1),
+                                               np.full_like(OoD_batch_weight, 2)])
+                batch_sample = utils.shuffle(batch_sample, random_state=0)
+                batch_labels = utils.shuffle(batch_labels, random_state=0)
+                batch_weight = utils.shuffle(batch_weight, random_state=0)
+                Discriminator_hist = Discriminator.train_on_batch(batch_sample, batch_labels, batch_weight,
                                                                   reset_metrics=False)
                 #print(Discriminator.metrics_names); print(Discriminator_hist); sys.exit()
-                loss_dict = {'Discriminator Loss'    :Discriminator_hist[0],
-                             'Discriminator Accuracy':Discriminator_hist[1]}
+                loss_dict = {'Disc Loss':Discriminator_hist[0], 'Disc Accuracy':Discriminator_hist[1]}
                 print_batch(n, n_batches, loss_dict)
             print('(', '\b' + format(time.time() - start_time, '.1f'), '\b' + 's)')
             if epoch+1 != n_epochs: print(3*'\033[A')
@@ -238,71 +222,60 @@ def train_AAE(model, train_generator, n_cycles, batch_size, output_dir, model_ou
         # AAE TRAINING
         n_epochs = epoch_dict['AAE'][cycle]
         if n_epochs != 0: print('training AAE'.upper())
-        else            : continue
+        #else            : continue
         start_time = time.time()
         Discriminator.trainable = False
         for epoch in range(n_epochs):
             print('Epoch %d/%d:'%(epoch+1, n_epochs))
             idx_batch = utils.shuffle(np.arange(n_batches), random_state=None)
             for n in range(len(idx_batch)):
-                '''
-                idx_data = idx_batch[n]*batch_size, min((idx_batch[n]+1)*batch_size, len(bkg_data))
-                batch_sample  = bkg_data   [idx_data[0]:idx_data[1]]
-                batch_weights = bkg_weights[idx_data[0]:idx_data[1]]
-                batch_labels  = np.full_like(batch_weights, 0)
-                #y_pred = Discriminator(AE(batch_sample))
-                #print( losses.SparseCategoricalCrossentropy()(batch_labels, y_pred, batch_weights) )
-                AAE_hist = AAE.train_on_batch(batch_sample, [batch_sample, batch_labels], [batch_weights, batch_weights],
-                                              reset_metrics=True)
+                idx_data = idx_batch[n]*batch_size, min((idx_batch[n]+1)*batch_size, len(bkg_sample))
+                bkg_batch_sample = utils.shuffle(bkg_sample[idx_data[0]:idx_data[1]], random_state=0)
+                OoD_batch_sample = utils.shuffle(OoD_sample[idx_data[0]:idx_data[1]], random_state=0)
+                bkg_batch_weight = utils.shuffle(bkg_weight[idx_data[0]:idx_data[1]], random_state=0)
+                OoD_batch_weight = utils.shuffle(OoD_weight[idx_data[0]:idx_data[1]], random_state=0)
+                all_batch_sample = np.concatenate([bkg_batch_sample, OoD_batch_sample], axis=0)
+                all_batch_weight = np.concatenate([bkg_batch_weight, OoD_batch_weight], axis=0)
+                all_batch_labels = np.concatenate([np.full_like(bkg_batch_weight, 0),
+                                                   np.full_like(OoD_batch_weight, 1)])
+                bkg_batch_sample = np.concatenate([bkg_batch_sample, bkg_batch_sample], axis=0)
+                bkg_batch_weight = np.concatenate([bkg_batch_weight, bkg_batch_weight], axis=0)
+                OoD_batch_sample = np.concatenate([OoD_batch_sample, OoD_batch_sample], axis=0)
+                OoD_batch_weight = np.concatenate([OoD_batch_weight, OoD_batch_weight], axis=0)
+                AAE_hist = AAE.train_on_batch([bkg_batch_sample, OoD_batch_sample, all_batch_sample],
+                                              [bkg_batch_sample, OoD_batch_sample, all_batch_labels],
+                                              [bkg_batch_weight, OoD_batch_weight, all_batch_weight],
+                                              reset_metrics=False)
+                #print(AAE.metrics_names); print(AAE_hist); sys.exit()
                 # Discriminator loss and accuracy
-                y_pred_real = Discriminator(batch_sample)
-                y_pred_fake = Discriminator(AE([batch_sample, batch_sample])[0])
-                y_true  = np.concatenate([np.full_like(batch_weights, 0), np.full_like(batch_weights, 1)])
-                y_pred  = tf.convert_to_tensor(np.concatenate([y_pred_real, y_pred_fake], axis=0))
-                weights = np.concatenate([batch_weights, batch_weights], axis=0)
-                discriminator_loss = losses.SparseCategoricalCrossentropy()(y_true, y_pred, weights).numpy()
-                discriminator_accuracy = get_accuracy(y_true, y_pred, weights)
-                '''
-                idx_data = idx_batch[n]*batch_size, min((idx_batch[n]+1)*batch_size, len(bkg_data))
-                bkg_batch_sample  = utils.shuffle(bkg_data   [idx_data[0]:idx_data[1]], random_state=0)
-                OoD_batch_sample  = utils.shuffle(OoD_data   [idx_data[0]:idx_data[1]], random_state=0)
-                bkg_batch_weights = utils.shuffle(bkg_weights[idx_data[0]:idx_data[1]], random_state=0)
-                OoD_batch_weights = utils.shuffle(OoD_weights[idx_data[0]:idx_data[1]], random_state=0)
-                batch_sample  = np.concatenate([bkg_batch_sample , OoD_batch_sample ], axis=0)
-                batch_weights = np.concatenate([bkg_batch_weights, OoD_batch_weights], axis=0)
-                batch_labels  = np.concatenate([np.full_like(bkg_batch_weights, 0),
-                                                np.full_like(OoD_batch_weights, 1)])
-                AAE_hist = AAE.train_on_batch(batch_sample, [batch_sample, batch_labels], [batch_weights, batch_weights],
-                                              reset_metrics=True)
-                print(AAE.metrics_names) ; print(AAE_hist) ; sys.exit()
-                # Discriminator loss and accuracy
-                bkg_batch_fake, _ = AE([bkg_batch_sample, OoD_batch_sample])
-                bkg_pred_sample = Discriminator(bkg_batch_sample)
-                bkg_pred_fake   = Discriminator(bkg_batch_fake  )
-                OoD_pred_sample = Discriminator(OoD_batch_sample)
-                y_true  = np.concatenate([np.full_like(bkg_batch_weights, 0),
-                                          np.full_like(bkg_batch_weights, 1),
-                                          np.full_like(OoD_batch_weights, 2)])
-                y_pred  = tf.convert_to_tensor(np.concatenate([bkg_pred_sample, bkg_pred_fake, OoD_pred_sample], axis=0))
-                weights = np.concatenate([bkg_batch_weights, bkg_batch_weights, OoD_batch_weights], axis=0)
-                discriminator_loss     = losses.SparseCategoricalCrossentropy()(y_true, y_pred, weights).numpy()
-                discriminator_accuracy = get_accuracy(y_true, y_pred, weights)
+                bkg_pred      = Discriminator(bkg_batch_sample)
+                OoD_pred      = Discriminator(OoD_batch_sample)
+                #bkg_fake, _   = AE([bkg_batch_sample, OoD_batch_sample])
+                #bkg_fake_pred = Discriminator(bkg_batch_fake)
+                bkg_fake_pred = Discriminator(AE([bkg_batch_sample, OoD_batch_sample])[0])
+                y_true  = np.concatenate([np.full_like(bkg_batch_weight, 0),
+                                          np.full_like(bkg_batch_weight, 1),
+                                          np.full_like(OoD_batch_weight, 2)])
+                y_pred  = tf.convert_to_tensor(np.concatenate([bkg_pred, bkg_fake_pred, OoD_pred], axis=0))
+                weights = np.concatenate([bkg_batch_weight, bkg_batch_weight, OoD_batch_weight], axis=0)
+                disc_loss     = losses.SparseCategoricalCrossentropy()(y_true, y_pred, weights).numpy()
+                disc_accuracy = get_accuracy(y_true, y_pred, weights)
                 #reconstructed, y_pred = AAE(batch_sample)
                 #AE_loss = losses.MeanAbsoluteError()(batch_sample, reconstructed)
                 #AE_loss = np.mean(MAE_dist(batch_sample, reconstructed))
-                loss_dict = {'AE Loss'               :AAE_hist[1]           ,
-                             'Discriminator Loss'    :discriminator_loss    ,
-                             'Discriminator Accuracy':discriminator_accuracy,
-                             'AAE Loss'              :AAE_hist[1] + epsilon*AAE_hist[2]}
-                print_batch(n, n_batches, {**loss_dict, 'D_Loss':epsilon*AAE_hist[2], 'D_Accuracy':AAE_hist[3]})
+                loss_dict = {'AE Loss'   :AAE_hist[1], 'OoD Loss'     :AAE_hist[2]       ,
+                             'Disc Loss' :disc_loss  , 'Disc Accuracy':disc_accuracy     ,
+                             'Total Loss':AAE_hist[1] + lamb*AAE_hist[2] + beta*disc_loss}
+                AAE_dict = {'AAE Loss':AAE_hist[0], 'D_Loss':AAE_hist[3], 'D_Accuracy':AAE_hist[6]}
+                print_batch(n, n_batches, {**loss_dict, **AAE_dict})
             print('(', '\b' + format(time.time() - start_time, '.1f'), '\b' + 's)')
             if epoch+1 != n_epochs: print(3*'\033[A')
             epoch_counter += 1
             for key in loss_dict: loss_history[key] += [(cycle+1, epoch_counter, loss_dict[key])]
-            #AAE.reset_metrics()
-    #for key,val in loss_history.items():
-    #    print()
-    #    print(format(key,'22'), val)
+            AAE.reset_metrics()
+    for key,val in loss_history.items():
+        print()
+        print(format(key,'22'), val)
     AAE.save_weights(output_dir+'/'+'AAE.h5')
 
 

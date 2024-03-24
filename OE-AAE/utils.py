@@ -14,15 +14,13 @@ def get_file(data_type, host_name='atlas'):
     if 'atlas'  in host_name: data_path = '/opt/tmp/godin/AD_data'
     if 'beluga' in host_name: data_path = '/project/def-arguinj/shared/AD_data'
     data_files = {
-                  #'QCD-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M_dPhifixed_float32.h5'         ,
-                  'QCD-Geneva':'formatted_converted_20210629_QCDjj_pT_450_inf_nevents_15M_weighted_float32.h5'           ,
+                  'QCD-Geneva' :'formatted_converted_20210629_QCDjj_pT_450_1200_nevents_10M_dPhifixed_float32.h5'         ,
+                  #'QCD-Geneva':'formatted_converted_20210629_QCDjj_pT_450_inf_nevents_15M_weighted_float32.h5'            ,
                   'top-Geneva' :'formatted_converted_20211213_ttbar_allhad_pT_450_1200_nevents_10M_dPhifixed_float32.h5'  ,
-                  #'2HDM_200GeV':'formatted_converted_delphes_H_HpHm_generation_mh2_2000_mhc_200_nevents_1M_float32.h5'   ,
                   '2HDM_200GeV':'formatted_converted_delphes_H_HpHm_tb_generation_mh2_2000_mhc_200_nevents_10M_float32.h5',
-                  #'2HDM_500GeV':'formatted_converted_delphes_H_HpHm_generation_mh2_5000_mhc_500_nevents_1M_float32.h5'   ,
                   '2HDM_500GeV':'formatted_converted_delphes_H_HpHm_tb_generation_mh2_5000_mhc_500_nevents_10M_float32.h5',
-                  #'VZ-Geneva'  :'formatted_converted_delphes_z_zprime_tt_allhad_MVz_2000_MT_200_nevents_1M_float32.h5'    ,
-                  'VZ-Geneva'  :'formatted_converted_delphes_z_zprime_tt_allhad_MVz_5000_MT_500_nevents_1M_float32.h5'   ,
+                  'VZ_200GeV'  :'formatted_converted_delphes_z_zprime_tt_allhad_MVz_2000_MT_200_nevents_1M_float32.h5'    ,
+                  'VZ_500GeV'  :'formatted_converted_delphes_z_zprime_tt_allhad_MVz_5000_MT_500_nevents_8M_float32.h5'    ,
                   'QCD-Delphes':'Delphes_dijet.h5'   ,
                   'top-Delphes':'Delphes_ttbar.h5'   ,
                   'QCD-topo'   :'Atlas_topo-dijet.h5',
@@ -39,17 +37,19 @@ def get_file(data_type, host_name='atlas'):
 
 
 def get_data(Autoencoder, Discriminator, bkg_data, sig_data, n_bkg, n_sig, cuts, n_const, n_dims,
-             constituents, HLVs, HLV_list, const_scaler, HLV_scaler, normal_loss, deco):
+             constituents, HLVs, HLV_list, const_scaler, HLV_scaler, normal_loss, deco, output_dir):
     def loss_mapping(x):
         if   np.all(np.logical_and(x >= 0, x <= 1)): return  x
         elif np.all(np.logical_and(x >=-1, x <= 0)): return  x + 1
         elif np.all(x >= 0)                        : return  x/(1 + x)
+        #elif np.all(x >= 0)                        : return  x/np.max(x)
         elif np.all(x <= 0)                        : return  1/(1 - x)
         else                                       : return (x/(np.abs(x)+1) + 1)/2
     n_sig = min(n_sig, len(list(h5py.File(get_file(sig_data),'r').values())[0]))
     sample = make_sample(bkg_data, sig_data, n_bkg, n_sig, cuts, n_const, n_dims, constituents, HLVs, HLV_list)
     y_true = np.where(sample['JZW']==-1, 0, 1)
-    sample['weights'][y_true==0] /= adjust_weights(sample, y_true, factor=20) #Adjusting weights for signal
+    factor = 20 if sig_data=='2HDM_200GeV' or sig_data=='top-Geneva' else 5
+    sample['weights'][y_true==0] /= adjust_weights(sample, y_true, factor=factor) #Adjusting weights for signal
     if 'constituents' in sample:
         sample['constituents'] = apply_scaler(sample['constituents'], n_dims, const_scaler)
     if 'HLVs' in sample:
@@ -60,16 +60,14 @@ def get_data(Autoencoder, Discriminator, bkg_data, sig_data, n_bkg, n_sig, cuts,
         X_true = sample['constituents']
     elif 'HLVs' in sample:
         X_true = sample['HLVs']
-
-    X_auto = Autoencoder  .predict(X_true, batch_size=int(1e4), verbose=1)
-    X_disc = Discriminator.predict(X_true, batch_size=int(1e4), verbose=1)
-
-    X_pred = {'AUTOENCODER':X_auto, 'DISCRIMINATOR':X_disc}
-    X_loss = {'AUTOENCODER':make_discriminant(X_true, X_auto, metric='MAE'), 'DISCRIMINATOR':X_disc[:,0]}
-
+    print('\n'+(sig_data+': inference').upper())
+    print('Autoencoder'  ) ; X_auto = Autoencoder  .predict(X_true, batch_size=int(1e4), verbose=1)
+    print('Discriminator') ; X_disc = Discriminator.predict(X_true, batch_size=int(1e4), verbose=1)
+    X_loss = {'Autoencoder':make_discriminant(X_true, X_auto, metric='MAE'), 'Discriminator':X_disc[:,2]}
+    #X_loss['AAE'] = Discriminator.predict(X_auto, batch_size=int(1e4), verbose=1)[:,2]
+    X_loss['Auto+Disc'] = (X_loss['Autoencoder']+X_loss['Discriminator'])/2
     if normal_loss == 'ON' or deco in ['m','pt','2d']:
         X_loss = {layer:loss_mapping(X_loss[layer]) for layer in X_loss}
-        #X_loss = {layer:loss_mapping(X_loss[layer]) for layer in ['AUTOENCODER']}
     if deco in ['m','pt','2d']:
         manager   = mp.Manager(); return_dict = manager.dict()
         arguments = [(y_true, sample, X_loss[layer], layer, deco, return_dict) for layer in X_loss]
@@ -78,21 +76,29 @@ def get_data(Autoencoder, Discriminator, bkg_data, sig_data, n_bkg, n_sig, cuts,
         for job in threads: job.join()
         X_loss = return_dict
     print()
-    return {'sample':sample, 'y_true':y_true, 'X_true':X_true, 'X_pred':X_pred, 'X_loss':X_loss}
+    return {'sample':sample, 'y_true':y_true, 'X_true':X_true, 'X_loss':X_loss}
 
 
-def get_bins(var, var_bins=None, max_bins=100, min_bin_count=2, logspace=True, deco=True):
+def get_bins(var, var_bins=None, max_bins=100, min_bin_count=2, logspace=True, deco=True, offset=0):
     if not deco: return [np.min(var), np.max(var)]
     if var_bins is None:
-        if logspace: var_bins = np.logspace(np.log10(np.min(var)), np.log10(np.max(var)), num=max_bins)
-        else       : var_bins = np.linspace(         np.min(var) ,          np.max(var) , num=max_bins)
+        #if logspace: var_bins = np.logspace(np.log10(np.min(var)), np.log10(np.max(var)), num=max_bins)
+        #else       : var_bins = np.linspace(         np.min(var) ,          np.max(var) , num=max_bins)
+        min_var, max_var = np.min(np.float64(var)), np.max(np.float64(var))
+        if logspace: var_bins = np.logspace(np.log10(min_var), np.log10(max_var), num=max_bins)
+        else       : var_bins = np.linspace(         min_var ,          max_var , num=max_bins)
+        var_bins[0], var_bins[-1] = min_var, max_var+offset
     while True:
-        var_idx = np.clip(np.digitize(var, var_bins), 1, len(var_bins)-1) - 1
-        for idx in range(len(var_bins)-1)[::-1]:
+        try:
+            var_idx = np.clip(np.digitize(var, var_bins), 1, len(var_bins)-1) - 1
+        except:
+            print(var_bins)
+            sys.exit()
+        for idx in range(1,len(var_bins)-1)[::-1]:
             if np.sum(var_idx==idx) < max(2, min_bin_count):
                 var_bins = np.delete(var_bins, idx)
                 break
-        if idx == 0: return var_bins
+        if idx == 1: return var_bins
 def cum_distribution(x):
     values, counts = np.unique(x, return_counts=True)
     if 0 not in values: values, counts = np.r_[0, values], np.r_[0, counts]
@@ -101,7 +107,8 @@ def cum_distribution(x):
 def bin_deco(y_true, sample, X_loss, layer, deco='2d', return_dict=None, multithreading=True):
     if deco not in ['m','pt','2d']: return
     def get_pt_bins(mass, pt, deco, m_range):
-        return get_bins(pt[np.logical_and(mass>=m_range[0], mass<m_range[1])], deco=False if deco=='m' else True)
+        cuts = mass>=m_range[0], mass<=m_range[1] if np.max(mass)==m_range[1] else mass<m_range[1]
+        return get_bins(pt[np.logical_and(cuts[0], cuts[1])], deco=False if deco=='m' else True)
     def get_loss(X_loss, bkg_loss, m_idx_bkg, pt_idx_bkg, m_idx, pt_idx, multithreading, m):
         for n in range(np.max(pt_idx[m])+1):
             cdf = cum_distribution(bkg_loss[np.logical_and(m_idx_bkg==m, pt_idx_bkg[m]==n)])
@@ -237,6 +244,7 @@ def load_data(data_type, idx, cuts, n_const, n_dims, constituents, HLVs, HLV_lis
 
 def make_sample(bkg_data, sig_data, bkg_idx=1, sig_idx=1, cuts='', n_const=20, n_dims=4, constituents='ON', HLVs='ON',
                 HLV_list=None, var_list=None, DSIDs=None, adjust_weights=False, shuffling=False, verbose=True):
+    print((sig_data+': loading data').upper())
     sig_sample = load_data(sig_data, sig_idx, cuts, n_const, n_dims, constituents, HLVs,
                            HLV_list, var_list, DSIDs, adjust_weights, verbose)
     bkg_sample = load_data(bkg_data, bkg_idx, cuts, n_const, n_dims, constituents, HLVs,
@@ -431,12 +439,14 @@ def JSD(P, Q, idx, n_dims, return_dict, reshape=False):
     else: return_dict[idx] = [distance.jensenshannon(P[n,:], Q[n,:], base=2) for n in np.arange(idx[0],idx[1])]
 
 
-def KSD(P, Q, idx, n_dims, return_dict, reshape=False):
-    if reshape:
-        P, Q = np.reshape(P, (-1,int(P.shape[1]/n_dims),n_dims)), np.reshape(Q, (-1,int(Q.shape[1]/n_dims),n_dims))
-        return_dict[idx] = [np.mean([stats.ks_2samp(P[n,:,m], Q[n,:,m])[0] for m in np.arange(n_dims)])
-                            for n in np.arange(idx[0],idx[1])]
-    else: return_dict[idx] = [stats.ks_2samp(P[n,:], Q[n,:])[0] for n in np.arange(idx[0],idx[1])]
+#def KSD(P, Q, idx, n_dims, return_dict, reshape=False):
+#    if reshape:
+#        P, Q = np.reshape(P, (-1,int(P.shape[1]/n_dims),n_dims)), np.reshape(Q, (-1,int(Q.shape[1]/n_dims),n_dims))
+#        return_dict[idx] = [np.mean([stats.ks_2samp(P[n,:,m], Q[n,:,m])[0] for m in np.arange(n_dims)])
+#                            for n in np.arange(idx[0],idx[1])]
+#    else: return_dict[idx] = [stats.ks_2samp(P[n,:], Q[n,:])[0] for n in np.arange(idx[0],idx[1])]
+def KSD(P, Q, idx, return_dict):
+    return_dict[idx] = [stats.ks_2samp(P[n,:], Q[n,:])[0] for n in np.arange(idx[0],idx[1])]
 
 
 def EMD(P, Q, idx, n_dims, return_dict, n_iter=int(1e7)):
@@ -473,10 +483,20 @@ def make_discriminant(P, Q, metric, layer=None, X_losses=None, delta=1e-32):
     if metric == 'MSE' : loss = np.mean(      (P - Q)**2 , axis=1)
     if metric == 'MAE' : loss = np.mean(np.abs(P - Q)    , axis=1)
     if metric == 'MARE': loss = np.mean(np.abs(P - Q)/P  , axis=1)
+    if metric in ['JSD', 'KSD','KLD', 'X-S']:
+        P, Q = P/np.sum(P,axis=1)[:,np.newaxis], Q/np.sum(Q,axis=1)[:,np.newaxis]
+    if metric in ['KSD', 'EMD']:
+        idx_tuples = get_idx(len(P), mp.cpu_count()//3)
+        target     = JSD if metric=='JSD' else KSD if metric=='KSD' else EMD
+        manager    = mp.Manager(); return_dict = manager.dict()
+        #processes  = [mp.Process(target=target, args=(P, Q, idx, n_dims, return_dict)) for idx in idx_tuples]
+        processes  = [mp.Process(target=target, args=(P, Q, idx, return_dict)) for idx in idx_tuples]
+        for task in processes: task.start()
+        for task in processes: task.join()
+        loss = np.concatenate([return_dict[idx] for idx in idx_tuples])
     if metric == 'KLD' :
         loss = np.sum(KLD(P,Q), axis=1)
     if metric == 'JSD':
-        P, Q = P/np.sum(P, axis=1), Q/np.sum(Q, axis=1)
         M = (P + Q) / 2
         loss = np.sqrt( np.sum((KLD(P,M)+KLD(Q,M))/2, axis=1) )
     if metric == 'X-S' :
@@ -514,7 +534,7 @@ def fit_scaler(sample, n_dims, scaler_out, scaler_type='RobustScaler', reshape=F
     pickle.dump(scaler, open(scaler_out, 'wb'))
     return scaler
 def apply_scaling(sample, n_dims, scaler, tag, reshape=False, verbose=True, idx=(0,None), return_dict=None):
-    if idx == (0,None) and verbose: print('\nApplying scaler/transformer to '+tag, end='', flush=True)
+    if idx == (0,None) and verbose: print('Applying scaler/transformer to '+tag, end='', flush=True)
     start_time = time.time()
     shape = sample.shape
     if reshape: sample = np.reshape(sample, (-1,n_dims))
@@ -526,7 +546,7 @@ def apply_scaling(sample, n_dims, scaler, tag, reshape=False, verbose=True, idx=
     else: return_dict[idx] = sample
 def apply_scaler(sample, n_dims, scaler, tag='sample', reshape=False, verbose=True):
     if scaler is None: return sample
-    if verbose: print('\nApplying scaler/transformer to '+tag, end='', flush=True)
+    if verbose: print('Applying scaler/transformer to '+tag, end='', flush=True)
     start_time = time.time()
     idx_tuples = get_idx(len(sample), int(mp.cpu_count()/2))
     manager = mp.Manager(); return_dict = manager.dict()
@@ -548,7 +568,7 @@ def inverse_scaler(sample, n_dims, scaler, reshape=False):
     return sample
 
 
-def bump_hunter(sample, filename=None, sig_label=None, max_sigma=None,
+def bump_hunter(sample, filename=None, sig_label=None, max_sigma=np.nan,
                 m_range=[0,800], bin_size=5, print_info=False, logspace=False):
     verbose = filename is not None and print_info
     y_true = np.where(sample['JZW']==-1, 0, 1)
@@ -561,23 +581,23 @@ def bump_hunter(sample, filename=None, sig_label=None, max_sigma=None,
     bins = get_bins(bkg, bins, min_bin_count=20)
     data_hist, bin_edges = np.histogram(data, bins=bins, range=m_range, weights=data_weights)
     bkg_hist , bin_edges = np.histogram(bkg , bins=bins, range=m_range, weights= bkg_weights)
+    """ BumpHunter1D class instance """
     #import pyBumpHunter as BH; sys.path.append('../')
     #from BumpHunter.BumpHunter.bumphunter_1dim import BumpHunter1D
-    """ BumpHunter1D class instance """
-    hunter = BumpHunter1D(rang=m_range, width_min=1, width_max=10, width_step=1, scan_step=1,
-                          npe=100, nworker=1, seed=None, bins=bin_edges)
     #hunter = BH.BumpHunter1D(rang=m_range, width_min=1, width_max=10, width_step=1, scan_step=1,
     #                         npe=100, nworker=1, seed=None, bins=bin_edges)
+    hunter = BumpHunter1D(rang=m_range, width_min=1, width_max=10, width_step=1, scan_step=1,
+                          npe=100, nworker=1, seed=None, bins=bin_edges)
     hunter.bump_scan(data_hist, bkg_hist, is_hist=True, verbose=verbose)
     bin_sigma, bump_range = hunter.plot_bump(data_hist, bkg_hist, is_hist=True)
+    loc_sigma = hunter.bump_info(data_hist, verbose=verbose)
     try:
         gaussian_par = fit_gaussian(bins, bin_sigma, bump_range)
     except:
         try: gaussian_par = fit_gaussian(bins, bin_sigma)
-        except Exception as error: pass #print(error)
-    loc_sigma = hunter.bump_info(data_hist, verbose=verbose)
-    if max_sigma is None:
-        max_sigma = gaussian_par[0]*gaussian_par[3]
+        except Exception as error: print(error)
+    if max_sigma is np.nan and gaussian_par is not np.nan:
+        max_sigma = np.max(bin_sigma) #= gaussian_par[0]*gaussian_par[3]
     if filename is not None:
         from plots import plot_bump
         plot_bump(data, data_weights, y_true, bins, bin_sigma, loc_sigma, max_sigma,
@@ -597,7 +617,8 @@ def fit_gaussian(bins, bin_sigma, bump_range=None):
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         x_val, y_val = (x_val - B_approx)/C_approx, y_val/A_approx
-        height, mean, std = optimize.curve_fit(Gaussian, x_val, y_val)[0]
+        try   : height, mean, std = optimize.curve_fit(Gaussian, x_val, y_val)[0]
+        except: return np.nan
     return A_approx, B_approx, C_approx, height, mean, std
 
 

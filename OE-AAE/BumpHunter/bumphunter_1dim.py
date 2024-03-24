@@ -14,7 +14,14 @@ from .util import deprecated, deprecated_arg
 
 from scipy.optimize import curve_fit #DG
 import warnings, mpmath, sys #DG
-mpmath.mp.dps=1000 #DG
+mpmath.mp.dps=500 #DG
+# float64  --> sig_max = 37.5
+# dps= 500 --> sig_max = 47.9
+# dps=1000 --> sig_max = 67.8
+# dps=2000 --> sig_max = 95.9
+# dps=3000 --> sig_max = 117.5
+# dps=4000 --> sig_max = 135.7
+# dps=5000 --> sig_max = 151.7
 
 class BumpHunter1D:
     """The BumpHunter class is the object providing all the necessary tools to "bump hunt" with ease.
@@ -376,6 +383,7 @@ class BumpHunter1D:
         # Create the results array
         res = np.empty(w_ar.size, dtype=object)
         min_Pval, min_loc = np.empty(w_ar.size), np.empty(w_ar.size, dtype=int)
+        min_Pval = np.array([mpmath.mpf(n) for n in min_Pval]) #DG
         signal_eval = np.empty(w_ar.size)
 
         # Prepare things for side-band normalization (if needed)
@@ -431,6 +439,7 @@ class BumpHunter1D:
                 )
 
             #if np.any(res[i] <= 1e-300): #DG
+            #if np.any(res[i] == 0): #DG
             #    print(len(res[i]), len(Nhist), len(Nref))
             #    print(res[i])
             #    printout = True
@@ -448,20 +457,19 @@ class BumpHunter1D:
             res[i] = np.array([mpmath.mpf(n) for n in res[i]])
             res[i][cuts] = [get_res(Nhist[cuts], Nref[cuts], idx) for idx in range(np.sum(cuts))]
 
-            if self.use_sideband:
-                res[i][
-                    res[i] < 1e-300
-                ] = 1e-300  # prevent issue with very low p-value, sometimes induced by normalisation in the tail
-
-            #res[i][res[i] < 1e-300] = 1e-300  #DG
-            #res[i] = res[i][res[i]>1e-300] # DG
-
-            #if np.any(res[i] <= 1e-300) or printout: #DG
-            #    print(res[i])
-            #    print()
+            #if self.use_sideband:
+            #    res[i][
+            #        res[i] < 1e-300
+            #    ] = 1e-300  # prevent issue with very low p-value, sometimes induced by normalisation in the tail
 
             # Get the minimum p-value and associated position for width w
             min_Pval[i] = res[i].min()
+            #if np.any(res[i] <= 1e-300) or printout: #DG
+            #    print(len(res[i]), len(Nhist), len(Nref))
+            #    with mpmath.workdps(10):
+            #        print(i, pos.size, res[i].min())
+            #        print(i, pos.size, min_Pval[i])
+            #        print()
             min_loc[i] = pos[res[i].argmin()]
             signal_eval[i] = Nhist[res[i].argmin()] - Nref[res[i].argmin()]
             if self.use_sideband:
@@ -1099,6 +1107,7 @@ class BumpHunter1D:
         else:
             if do_pseudo:
                 self.min_Pval_ar = np.empty(self.npe + 1)
+                self.min_Pval_ar = np.array([mpmath.mpf(n) for n in self.min_Pval_ar]) #DG
                 self.min_loc_ar = np.empty(self.npe + 1, dtype=int)
                 self.min_width_ar = np.empty(self.npe + 1, dtype=int)
                 self.t_ar = np.empty(self.npe + 1)
@@ -1209,7 +1218,10 @@ class BumpHunter1D:
             #with mpmath.workdps(10):
             #    print(np.array([-mpmath.log(n) for n in self.min_Pval_ar])) #DG
             #    print()
-            self.t_ar = -np.log(self.min_Pval_ar)
+            #print(len(self.min_Pval_ar))
+            #print(self.min_Pval_ar)
+            #self.t_ar = -np.log(self.min_Pval_ar)
+            self.t_ar = np.array([-mpmath.log(n) for n in self.min_Pval_ar])
 
         # Compute the global p-value from the t distribution
         if self.t_ar.size > 1:
@@ -1327,6 +1339,7 @@ class BumpHunter1D:
 
         # Initialize all results containenrs
         self.min_Pval_ar = np.empty(self.npe)
+        self.min_Pval_ar = np.array([mpmath.mpf(n) for n in self.min_Pval_ar]) #DG
         self.min_loc_ar = np.empty(self.npe, dtype=int)
         self.min_width_ar = np.empty(self.npe, dtype=int)
         self.res_ar = np.empty(self.npe, dtype=object)
@@ -1422,7 +1435,9 @@ class BumpHunter1D:
             )
 
             # Initialize all results containenrs
-            self.min_Pval_ar = np.empty(self.npe_inject)
+            #self.min_Pval_ar = np.empty(self.npe_inject)
+            #self.min_Pval_ar = np.empty(self.npe_inject, dtype=np.float128) #DG
+            self.min_Pval_ar = np.array([mpmath.mpf(n) for n in self.min_Pval_ar]) #DG
             self.min_loc_ar = np.empty(self.npe_inject, dtype=int)
             self.min_width_ar = np.empty(self.npe_inject, dtype=int)
             self.res_ar = np.empty(self.npe_inject, dtype=object)
@@ -1789,6 +1804,7 @@ class BumpHunter1D:
 
         # Calculate significance for each bin
         sig = np.ones(Hbkg.size)
+        #sig = np.array([mpmath.mpf(n) for n in sig]) #DG
         sig[(H[0]>Hbkg) & (Hbkg>0)] = gammainc (H[0][(H[0]>Hbkg) & (Hbkg>0)], Hbkg[(H[0]>Hbkg) & (Hbkg>0)])
         sig[ H[0]<Hbkg]             = gammaincc(H[0][ H[0]<Hbkg] + 1        , Hbkg[ H[0]<Hbkg]            )
         #z, b = H[0][(H[0]>Hbkg) & (Hbkg>0)], Hbkg[(H[0]>Hbkg) & (Hbkg>0)] #DG
@@ -1797,13 +1813,22 @@ class BumpHunter1D:
         #sig[H[0]<Hbkg] = [mpmath.gammainc(z[n],a[n],np.inf, regularized=True) for n in range(len(z))] #DG
         #sig = norm.ppf(1 - sig)
         sig = -norm.ppf(sig) #DG
+        #sig = np.array([np.sqrt(2)*mpmath.erfinv(1-2*n) for n in sig]) #DG
 
+        def get_erfinv(x, prec=500): #DG
+            while prec <= 5000:
+                with mpmath.workdps(prec):
+                    erf_inv = mpmath.erfinv(1-2*x)
+                if np.abs(erf_inv) == np.inf: prec += 500
+                else                        : break
+            return erf_inv
         def get_sig(H, Hbkg, idx):
             if   H[idx] > Hbkg[idx] and Hbkg[idx] > 0:
                 sig = mpmath.gammainc(H[idx]  , 0        , Hbkg[idx], regularized=True)
             elif H[idx] < Hbkg[idx]:
                 sig = mpmath.gammainc(H[idx]+1, Hbkg[idx], np.inf   , regularized=True)
-            return np.sqrt(2)*mpmath.erfinv(1-2*sig)
+            return np.sqrt(2)*get_erfinv(sig)
+            #return np.sqrt(2)*mpmath.erfinv(1-2*sig)
         cuts = (((H[0]>Hbkg) & (Hbkg>0)) | (H[0]<Hbkg)) & (np.abs(sig)==np.inf)
         sig[cuts] = [get_sig(H[0][cuts], Hbkg[cuts], idx) for idx in range(np.sum(cuts))] #DG
 
@@ -2126,10 +2151,12 @@ class BumpHunter1D:
             bstr += f'  (loc={self.min_loc_ar[0]}, width={self.min_width_ar[0]})\n'
             bstr += f'Bump mean | width : {Bmean:.3g} | {Bwidth:.3g}\n'
             bstr += f'Evaluated number of signal events : {self.signal_eval:.3g}\n'
-            bstr += f'Local p-value | test statistic : {self.min_Pval_ar[0]:.5g}'
-            bstr += f' | {self.t_ar[0]:.5g}\n'
+            #bstr += f'Local p-value | test statistic : {self.min_Pval_ar[0]:.5g}'
+            bstr += f'Local p-value | test statistic : {np.float(self.min_Pval_ar[0]):.5g}' #DG
+            #bstr += f' | {self.t_ar[0]:.5g}\n'
+            bstr += f' | {np.float(self.t_ar[0]):.5g}\n' #DG
             #bstr += f'Local significance : {norm.ppf(1 - self.min_Pval_ar[0]):.5g}\n'
-            bstr += f'Local significance : {-norm.ppf(self.min_Pval_ar[0]):.5g}\n' #DG
+            bstr += f'Local significance : {-norm.ppf(np.float(self.min_Pval_ar[0])):.5g}\n' #DG
 
         # Append global results to the string
         bstr += f'Global p-value : {self.global_Pval:.5g}\n'
@@ -2140,8 +2167,18 @@ class BumpHunter1D:
         bstr += '\n' #DG
 
         #return bstr
+
         if verbose: print(bstr) #DG
-        loc_sigma = -norm.ppf(self.min_Pval_ar[0]) #DG
+        def get_erfinv(x, prec=500): #DG
+            while prec <= 5000:
+                with mpmath.workdps(prec):
+                    erf_inv = mpmath.erfinv(1-2*x)
+                if np.abs(erf_inv) == np.inf: prec += 500
+                else                        : break
+            return erf_inv
+        #loc_sigma = -norm.ppf(self.min_Pval_ar[0]) #DG
+        #loc_sigma = np.float(np.sqrt(2)*mpmath.erfinv(1-2*self.min_Pval_ar[0])) #DG
+        loc_sigma = np.float(np.sqrt(2)*get_erfinv(self.min_Pval_ar[0])) #DG
         return loc_sigma #DG
 
     # Method that print the local infomation about the most significante bump in data
