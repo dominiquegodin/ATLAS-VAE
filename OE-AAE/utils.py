@@ -48,7 +48,7 @@ def get_data(Autoencoder, Discriminator, bkg_data, sig_data, n_bkg, n_sig, cuts,
     n_sig = min(n_sig, len(list(h5py.File(get_file(sig_data),'r').values())[0]))
     sample = make_sample(bkg_data, sig_data, n_bkg, n_sig, cuts, n_const, n_dims, constituents, HLVs, HLV_list)
     y_true = np.where(sample['JZW']==-1, 0, 1)
-    factor = 20 if sig_data=='2HDM_200GeV' or sig_data=='top-Geneva' else 5
+    factor = 20 if sig_data=='2HDM_200GeV' or sig_data=='top-Geneva' else 20
     sample['weights'][y_true==0] /= adjust_weights(sample, y_true, factor=factor) #Adjusting weights for signal
     if 'constituents' in sample:
         sample['constituents'] = apply_scaler(sample['constituents'], n_dims, const_scaler)
@@ -597,7 +597,9 @@ def bump_hunter(sample, filename=None, sig_label=None, max_sigma=np.nan,
         try: gaussian_par = fit_gaussian(bins, bin_sigma)
         except Exception as error: print(error)
     if max_sigma is np.nan and gaussian_par is not np.nan:
-        max_sigma = np.max(bin_sigma) #= gaussian_par[0]*gaussian_par[3]
+        max_sigma = max(np.max(bin_sigma), gaussian_par[0]*gaussian_par[3])
+    elif max_sigma is np.nan:
+        max_sigma = np.max(bin_sigma)
     if filename is not None:
         from plots import plot_bump
         plot_bump(data, data_weights, y_true, bins, bin_sigma, loc_sigma, max_sigma,

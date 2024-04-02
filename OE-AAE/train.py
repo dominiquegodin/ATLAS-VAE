@@ -12,39 +12,37 @@ from   plots    import sample_distributions, plot_results, plot_history
 
 # PROGRAM ARGUMENTS
 parser = ArgumentParser()
-parser.add_argument( '--n_train'      , default = 1e6          , type = float         )
-parser.add_argument( '--n_valid'      , default = 1e6          , type = float         )
-parser.add_argument( '--n_OoD'        , default = 10e6         , type = float         )
-parser.add_argument( '--n_sig'        , default = 1e6          , type = float         )
-parser.add_argument( '--n_const'      , default = 20           , type = int           )
-parser.add_argument( '--n_dims'       , default = 3            , type = int           )
-parser.add_argument( '--batch_size'   , default = 5e3          , type = float         )
-parser.add_argument( '--n_epochs'     , default = 100          , type = int           )
-parser.add_argument( '--layers_sizes' , default = [100,100,100], type = int, nargs='+')
-parser.add_argument( '--lr'           , default = 1e-3         , type = float         )
-parser.add_argument( '--beta'         , default = 0            , type = float         )
-parser.add_argument( '--lamb'         , default = 0            , type = float         )
-parser.add_argument( '--margin'       , default = 1            , type = float         )
-parser.add_argument( '--n_iter'       , default = 1            , type = int           )
-parser.add_argument( '--OE_type'      , default = 'KLD'                               )
-parser.add_argument( '--weight_type'  , default = 'X-S'                               )
-parser.add_argument( '--model_in'     , default = ''                                  )
-parser.add_argument( '--model_out'    , default = 'model.h5'                          )
-parser.add_argument( '--const_scaler_type', default = ''                              )
-parser.add_argument( '--const_scaler_in'  , default = ''                              )
-parser.add_argument( '--const_scaler_out' , default = ''                              )
-parser.add_argument( '--HLV_scaler_type'  , default = ''                              )
-parser.add_argument( '--HLV_scaler_in'    , default = ''                              )
-parser.add_argument( '--HLV_scaler_out'   , default = ''                              )
-parser.add_argument( '--hist_file'    , default = 'history.pkl'                       )
-parser.add_argument( '--output_dir'   , default = 'outputs'                           )
-parser.add_argument( '--plotting'     , default = 'ON'                                )
-parser.add_argument( '--apply_cuts'   , default = 'OFF'                               )
-parser.add_argument( '--normal_loss'  , default = 'ON'                                )
-parser.add_argument( '--decorrelation', default = 'OFF'                               )
-parser.add_argument( '--slurm_id'     , default = 0            , type = int           )
-parser.add_argument( '--constituents' , default = 'OFF'                               )
-parser.add_argument( '--HLVs'         , default = 'ON'                                )
+parser.add_argument( '--n_train'          , default = 1e6          , type = float         )
+parser.add_argument( '--n_valid'          , default = 1e6          , type = float         )
+parser.add_argument( '--n_OoD'            , default = 10e6         , type = float         )
+parser.add_argument( '--n_sig'            , default = 1e6          , type = float         )
+parser.add_argument( '--n_const'          , default = 20           , type = int           )
+parser.add_argument( '--n_dims'           , default = 3            , type = int           )
+parser.add_argument( '--batch_size'       , default = 5e3          , type = float         )
+parser.add_argument( '--n_epochs'         , default = 100          , type = int           )
+parser.add_argument( '--layers_sizes'     , default = [100,100,100], type = int, nargs='+')
+parser.add_argument( '--lr'               , default = 1e-3         , type = float         )
+parser.add_argument( '--beta'             , default = 0            , type = float         )
+parser.add_argument( '--lamb'             , default = 0            , type = float         )
+parser.add_argument( '--slurm_id'         , default = 0            , type = int           )
+parser.add_argument( '--weight_type'      , default = 'X-S'                               )
+parser.add_argument( '--model_in'         , default = ''                                  )
+parser.add_argument( '--model_out'        , default = 'model.h5'                          )
+parser.add_argument( '--AE_weights'       , default = ''                                  )
+parser.add_argument( '--const_scaler_type', default = ''                                  )
+parser.add_argument( '--const_scaler_in'  , default = ''                                  )
+parser.add_argument( '--const_scaler_out' , default = ''                                  )
+parser.add_argument( '--HLV_scaler_type'  , default = ''                                  )
+parser.add_argument( '--HLV_scaler_in'    , default = ''                                  )
+parser.add_argument( '--HLV_scaler_out'   , default = ''                                  )
+parser.add_argument( '--hist_file'        , default = 'history.pkl'                       )
+parser.add_argument( '--output_dir'       , default = 'outputs'                           )
+parser.add_argument( '--plotting'         , default = 'ON'                                )
+parser.add_argument( '--apply_cuts'       , default = 'OFF'                               )
+parser.add_argument( '--normal_loss'      , default = 'ON'                                )
+parser.add_argument( '--decorrelation'    , default = 'OFF'                               )
+parser.add_argument( '--constituents'     , default = 'OFF'                               )
+parser.add_argument( '--HLVs'             , default = 'ON'                                )
 args = parser.parse_args()
 for key in ['n_train', 'n_valid', 'n_OoD', 'n_sig', 'batch_size']: vars(args)[key] = int(vars(args)[key])
 if args.const_scaler_out == '': args.const_scaler_out = 'const_' + args.const_scaler_type + '.pkl'
@@ -61,6 +59,7 @@ args.const_scaler_out = args.output_dir+'/'+args.const_scaler_out
 args.HLV_scaler_in    = args.output_dir+'/'+args.HLV_scaler_in
 args.HLV_scaler_out   = args.output_dir+'/'+args.HLV_scaler_out
 args.hist_file        = args.output_dir+'/'+args.hist_file
+Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 #from plots import deco_example
 #deco_example(args.output_dir) ; sys.exit()
 
@@ -88,7 +87,7 @@ print('\nPROGRAM ARGUMENTS:\n'+tabulate(vars(args).items(), tablefmt='psql'))
 
 # LOADIND PRE-TRAINED WEIGHTS AND/OR CONSTITUENTS SCALER
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' #Suppressing Tensorflow infos and warnings
-model = create_model(input_size, args.layers_sizes)
+model = create_model(input_size, args.layers_sizes, args.beta, args.lamb)
 multithread = True ; const_scaler = None ; HLV_scaler = None
 if args.model_in != args.output_dir+'/':
     if not os.path.isfile(args.model_in): sys.exit()
@@ -132,7 +131,8 @@ if args.n_epochs > 0:
     train_sample = Batch_Generator(bkg_data, args.n_const, args.n_dims, args.n_train, OoD_sample,
                                    args.weight_type, train_cuts, multithread, args.constituents, args.HLVs,
                                    HLV_list, bin_sizes, HLV_scaler, const_scaler, args.output_dir)
-    train_AAE(model, train_sample, args.n_epochs, args.batch_size, args.output_dir, args.model_out)
+    train_AAE(model, train_sample, args.n_epochs, args.batch_size, args.output_dir,
+              args.model_out, args.hist_file, args.AE_weights, args.lamb)
 if args. plotting == 'OFF' and args.apply_cuts == 'OFF': sys.exit()
 
 
@@ -146,10 +146,10 @@ Discriminator = AAE.get_layer(name='DISCRIMINATOR')
 
 # PLOTTING PERFORMANCE RESULTS
 if args.plotting == 'ON':
-    if os.path.isfile(args.hist_file): plot_history(args.hist_file, args.output_dir)
+    #if os.path.isfile(args.hist_file): plot_history(args.hist_file, args.output_dir)
     #sig_list = ['2HDM_200GeV']
-    sig_list = ['2HDM_500GeV']
-    #sig_list = ['top-Geneva' ]
+    #sig_list = ['2HDM_500GeV']
+    sig_list = ['top-Geneva' ]
     #sig_list = ['VZ_500GeV'  ]
     for sig_data in sig_list:
         output_dir = args.output_dir+'/'+sig_data
